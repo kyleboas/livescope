@@ -12,6 +12,8 @@
 # It also installs livescope-update.timer, which pulls both checkouts every minute and restarts the site
 # when either changed, so pushing to GitHub deploys.
 set -euo pipefail
+command -v systemctl >/dev/null && command -v getent >/dev/null || {
+  echo "This installs the site's Linux server (systemd). Run it there (for livescope: ssh coding), not on this machine." >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo "Run with sudo: sudo bash $0" >&2; exit 1; }
 
 AGENT_USER="${SUDO_USER:-kyle}"
