@@ -1,5 +1,6 @@
 """livescope (https://livescope.kyleboas.com): real-world traffic from public ADS-B feeds."""
 import adsb
+import timelapse
 from scope.weather import Atis
 
 SITE = {
@@ -18,6 +19,8 @@ SITE = {
 
 def providers():
     """The site's data: traffic is required; world, routes and atis are optional (left out = feature off)."""
-    routes = adsb.Routes()
-    return {"traffic": adsb.Traffic(), "world": adsb.World(routes), "routes": routes, "atis": Atis(),
-            "max_nm": adsb.MAX_NM}
+    routes, traffic = adsb.Routes(), adsb.Traffic()
+    world = adsb.World(routes)
+    tl = timelapse.Timelapse(traffic, adsb.MAX_NM, world)
+    return {"traffic": traffic, "world": world, "routes": routes, "atis": Atis(),
+            "max_nm": adsb.MAX_NM, "features": ["timelapse"], "endpoints": {"timelapse": tl.endpoint}}

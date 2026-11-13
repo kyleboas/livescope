@@ -28,6 +28,17 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
     (a free OpenSky API client) to get one every 90 s.
   - No free feed covers the oceans, so airliners that leave every receiver's range at cruise are
     carried on toward their scheduled destination as estimates (hollow rings).
+- **Timelapses:** the clock button (top right) records the area in view on the server: one snapshot
+  every 5 s, for 15 min to 24 h, carrying on with nobody watching. Any recording plays back in the scope at
+  10× to 600×, eased between snapshots, with a scrubber; you can still pan, zoom, filter and click aircraft.
+  - Zoomed out to the globe, it records the whole world instead: OpenSky's worldwide snapshot, one every
+    90 s with an OpenSky API client (else every 15 min), played back at 60× to 3600×. About 100–400 KB
+    a snapshot, so ~4–16 MB an hour with a client. One world recording at a time.
+  - At most 4 record at once. Recordings are kept 30 days (or until they pass 4 GB in total) in
+    `livedata/timelapse/`, or `$LIVESCOPE_TIMELAPSE_DIR`. A busy airport at 60 nm takes about 2 MB an hour.
+  - `?tl=<id>` in the URL opens a recording, so it can be shared.
+  - Set `LIVESCOPE_TIMELAPSE_KEY` to make starting and stopping recordings need that key (typed once in the
+    panel, then remembered by the browser). Without it, anyone can record. Watching is always open.
 - **Split view:** the layout button (bottom left) cycles between one scope, big + small, and an even
   split. Each scope has its own view and layers; the second opens on the airport's field.
 - **Measure:** right-drag or shift-drag (long-press then drag on touch) shows distance and bearing. If
@@ -46,13 +57,15 @@ git clone https://github.com/kyleboas/livescope
 python3 scope/server.py livescope --port 8799     # Python 3.10+, standard library only
 ```
 
-Then open http://localhost:8799. Optional: `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` for the faster worldwide picture.
+Then open http://localhost:8799. Optional: `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` for the faster worldwide picture, and
+`LIVESCOPE_TIMELAPSE_KEY` so only you can record timelapses.
 
 ## Files
 
 ```
-site.py   the site's settings and which providers it uses
-adsb.py   ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates, adsbdb routes
+site.py        the site's settings and which providers it uses
+adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates, adsbdb routes
+timelapse.py   records areas' traffic on the server and serves it back for playback
 ```
 
 ATIS and METARs come from scope's `scope/weather.py`. Not for navigation. Data sources: [NOTICE.md](NOTICE.md). MIT ([LICENSE](LICENSE)).
