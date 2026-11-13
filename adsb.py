@@ -22,6 +22,19 @@ GAP_S = 0.4            # and upstream requests are spaced at least this far apar
 EMERG = ("7500", "7600", "7700")
 
 
+def credential(name):
+    """A secret from a systemd credential file (LoadCredential=<name>, see deploy/), else the environment
+    variable of the same name (opensky-client-id -> OPENSKY_CLIENT_ID)."""
+    d = os.environ.get("CREDENTIALS_DIRECTORY")
+    if d:
+        try:
+            with open(os.path.join(d, name), encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            pass
+    return os.environ.get(name.upper().replace("-", "_"), "").strip()
+
+
 def area_key(lat, lon, nm):
     nm = next(b for b in (15, 30, 60, 120, 180, MAX_NM) if nm <= b or b == MAX_NM)
     step = 0.1 if nm <= 30 else 0.25 if nm <= 60 else 0.5 if nm <= 120 else 1.0
@@ -102,15 +115,15 @@ class Traffic:
 class World:
     """Every aircraft on Earth (airborne and on the ground) for the zoomed-out globe, from OpenSky's /states/all (the free ADS-B
     feeds above only answer for 250 nm around a point). Anonymous use allows ~100 snapshots a day, so one
-    every 15 minutes; with a free OpenSky API client (OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET in the
-    environment) one every 90 s. Fetched only while someone is looking, shared by everyone."""
+    every 15 minutes; with a free OpenSky API client (opensky-client-id / opensky-client-secret from agent-secrets
+    via deploy/install-service.sh, or OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET in the environment) one every 90 s. Fetched only while someone is looking, shared by everyone."""
     URL = "https://opensky-network.org/api/states/all"
     TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 
     def __init__(self, routes):
         self.routes = routes
         self.lock = threading.Lock()
-        self.cid, self.secret = os.environ.get("OPENSKY_CLIENT_ID"), os.environ.get("OPENSKY_CLIENT_SECRET")
+        self.cid, self.secret = credential("opensky-client-id") or None, credential("opensky-client-secret")
         self.every = 90 if self.cid else 900
         self.body = json.dumps({"ok": False, "t": 0, "every": self.every, "ac": []}).encode()
         self.gz = gzip.compress(self.body)

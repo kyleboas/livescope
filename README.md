@@ -60,9 +60,15 @@ python3 scope/server.py livescope --port 8799     # Python 3.10+, standard libra
 Then open http://localhost:8799. Optional: `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` for the faster worldwide picture, and
 `LIVESCOPE_TIMELAPSE_KEY` so only you can record timelapses.
 
+On a server, `deploy/install-service.sh` installs it as a locked-down system service that takes the OpenSky
+client from agent-secrets (`sudo secret livescope opensky-client-id`, `sudo secret livescope
+opensky-client-secret`, then `sudo bash deploy/install-service.sh`) and pulls both repos every minute, so a
+push to GitHub deploys.
+
 ## Files
 
 ```
+deploy/        install-service.sh: the system service, its secrets and auto-deploy
 site.py        the site's settings and which providers it uses
 adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates, adsbdb routes
 timelapse.py   records areas' traffic on the server and serves it back for playback
