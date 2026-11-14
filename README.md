@@ -27,6 +27,11 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   settings (selected altitude and heading, modes, QNH), signal (source, last seen, messages, RSSI) and
   accuracy (NACp, NIC, SIL ...), with a planespotters.net photo. IAS, Mach, wind and the like only come
   from aircraft that send them (mostly over Europe).
+- **ACARS:** the aircraft card also lists the datalink messages the aircraft sent and received over the last
+  12 h (VHF ACARS, VDL2, HFDL and SATCOM), as heard by [airframes.io](https://app.airframes.io)'s volunteer
+  feeders, newest first. Most are airline and FMS reports, but some are ATC: CPDLC (shown encoded, as sent),
+  ATIS requests and oceanic or departure clearances. It only covers aircraft near a feeder or on SATCOM. The
+  server asks airframes.io at most once a minute per aircraft (their anonymous API allows 60 requests a minute).
 - **ALL / ARR / DEP / ARR+DEP** (bottom right) greys out and untags everything except the picked
   airport's arrivals and/or departures.
   - ADS-B has no flight plan, so these are guessed from track, altitude and climb/descent. Traffic goes
@@ -102,6 +107,7 @@ deploy/        install-service.sh: the system service, its secrets and auto-depl
 site.py        the site's settings and which providers it uses
 adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates (filed routes, North Atlantic Tracks), routes
 timelapse.py   records areas' traffic on the server and serves it back for playback
+acars.py       ACARS messages for the aircraft card, from airframes.io
 swim.py        FAA SWIM flight data: the SCDS queue (Solace's Python API) and TFMS flight plans by callsign
 tools/         swim_capture.py: saves a few minutes of a SWIM feed to look at
 ```
