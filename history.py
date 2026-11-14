@@ -12,8 +12,10 @@ indexed once (in the background) into <timelapse dir>/recent-index/<hour>.gz: on
 address's last two hex digits), each line [hex, [point, ...]], and <hour>.json giving each shard's [offset, length].
 A lookup reads one small member per hour, plus the hour still being recorded straight from its snapshots.
 """
+import bisect
 import gzip
 import json
+import math
 import os
 import struct
 import threading
@@ -68,6 +70,7 @@ class History:
         os.makedirs(self.dir, exist_ok=True)
         self.cache, self.lock = {}, threading.Lock()
         self.cur = (None, 0, [])            # the hour being recorded: (hour, bytes read, its snapshot lines)
+        self.around = Around(self)
         threading.Thread(target=self.worker, daemon=True).start()
 
     # ------------------------------------------------------------------ the index
@@ -244,6 +247,8 @@ class History:
         return out
 
     def endpoint(self, s):
+        if s("a", 8) == "around":
+            return self.around.get(s)
         hx = s("hex", 7).lower()
         if not HEX_RE.fullmatch(hx) or hx.startswith("~"):
             return {"ok": False, "error": "bad hex"}
@@ -268,6 +273,78 @@ class History:
             self.cache = {k: v for k, v in self.cache.items() if now - v[0] < FRESH_S}
         self.cache[hx] = (now, out)
         return out
+
+
+class Around:
+    """/api/live/history?a=around&hex=&t0=&t1=[&nm=]: the other aircraft within nm (default 60) of hx through t0..t1, from
+    the same world recording, for a replay to show the traffic around the flight:
+    {ok, every_s, frames:[[t, ac, est], ...]} in the recording's own form (adsb.World: ac [hex, lat, lon, trk, gs, alt/100,
+    ts, cs, gnd]; est [.., t, cs, to, last seen]). A long flight gets every 2nd, 3rd... snapshot (at most MAX_FRAMES)."""
+    MAX_FRAMES, MAX_H, KEEP_S = 160, 16, 600
+
+    def __init__(self, hist):
+        self.h, self.cache, self.lock = hist, {}, threading.Lock()
+
+    def get(self, s):
+        hx = s("hex", 7).lower()
+        try:
+            t0, t1, nm = float(s("t0", 14)), float(s("t1", 14)), float(s("nm", 5) or 60)
+        except ValueError:
+            return {"ok": False, "error": "bad t0, t1 or nm"}
+        if not HEX_RE.fullmatch(hx) or hx.startswith("~") or not t0 < t1 or t1 - t0 > self.MAX_H * 3600 or not 5 <= nm <= 150:
+            return {"ok": False, "error": "bad request"}
+        key, now = (hx, int(t0), int(t1), int(nm)), time.time()
+        hit = self.cache.get(key)
+        if hit and now - hit[0] < (self.KEEP_S if t1 < now - 300 else 60):
+            return hit[1]
+        with self.lock:                     # one at a time: a long flight is a few seconds' work
+            out = self.build(hx, t0, t1, nm)
+        if len(self.cache) > 50:
+            self.cache = {k: v for k, v in self.cache.items() if now - v[0] < self.KEEP_S}
+        self.cache[key] = (now, out)
+        return out
+
+    def lines(self, hr, hx):
+        if hr == int(time.time() // 3600) or not os.path.exists(os.path.join(self.h.dir, f"{hr}.json")):
+            self.h.recording(hr, hx)        # reads the hour being recorded on, and keeps it
+            if self.h.cur[0] == hr:
+                return self.h.cur[2]
+        return [x for data in members(os.path.join(self.h.raw, f"{hr}.ndjson.gz")) for x in data.split(b"\n") if x]
+
+    def build(self, hx, t0, t1, nm):
+        hours = [hr for hr in self.h.hours() if (hr + 1) * 3600 > t0 - 600 and hr * 3600 < t1 + 600]
+        got = []
+        for hr in hours:
+            rows = self.h.indexed(hr, hx)
+            got += self.h.recording(hr, hx) if rows is None else rows
+        pts = [p for p in thin([p for p, _ in got]) if t0 - 600 <= p[0] <= t1 + 600]
+        if not pts:
+            return {"ok": True, "frames": []}
+        ts = [p[0] for p in pts]
+        every_s = (self.h.tl.world.every if self.h.tl.world else 90) or 90
+        every = max(1, -(-int((t1 - t0) / every_s + 1) // self.MAX_FRAMES))
+        frames, i = [], 0
+        dlat = nm / 60
+        for hr in hours:
+            for line in self.lines(hr, hx):
+                t = float(line[1:line.index(b",")])
+                if not t0 - every_s <= t <= t1 + every_s:
+                    continue
+                i += 1
+                if (i - 1) % every:
+                    continue
+                k = bisect.bisect_left(ts, t)
+                a, b = pts[max(0, k - 1)], pts[min(len(pts) - 1, k)]
+                f = (t - a[0]) / (b[0] - a[0]) if b[0] > a[0] else 0
+                la, lo = a[1] + (b[1] - a[1]) * f, a[2] + (((b[2] - a[2] + 540) % 360) - 180) * f
+                dlon = nm / (60 * max(0.05, math.cos(math.radians(la))))
+                snap = json.loads(line)
+
+                def near(r):
+                    return r[0] != hx and abs(r[1] - la) < dlat and abs(((r[2] - lo + 540) % 360) - 180) < dlon and gc_nm(la, lo, r[1], r[2]) <= nm
+                frames.append([t, [r for r in snap[1] if near(r)], [r for r in (snap[2] if len(snap) > 2 else None) or [] if near(r)]])
+        frames.sort(key=lambda fr: fr[0])
+        return {"ok": True, "hex": hx, "nm": nm, "every_s": every_s * every, "frames": frames}
 
 
 def members(path):
