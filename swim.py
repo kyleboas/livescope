@@ -10,7 +10,9 @@ SWIM_TFMS_USERNAME etc.):
 The username and queue name hold the account's e-mail address, so they're kept out of the repository too.
 """
 import calendar
+import gzip
 import os
+import pickle
 import re
 import sys
 import threading
@@ -141,8 +143,10 @@ ETD, ETA, WAYPOINT, DMS = _tag("etd"), _tag("eta"), _tag("waypoint"), _tag("(?:l
 STATUS = re.compile(r"<(?:[\w.-]+:)?flightStatus>\s*(\w+)")
 REPORTED = re.compile(r"<(?:[\w.-]+:)?reportedPositionData\b.*?</(?:[\w.-]+:)?reportedPositionData>", re.S)
 ALTITUDE = re.compile(r"<(?:[\w.-]+:)?altitude>\s*(\d+)\s*<")
+ROUTE = re.compile(r"<(?:[\w.-]+:)?(?:routeOfFlight|newRouteOfFlight)\b[^>]*>([^<]+)<")
+FIX = re.compile(r"<(?:[\w.-]+:)?fix\b([^>]*)>([^<]+)<")
 TIME = re.compile(r"<(?:[\w.-]+:)?time>([^<]+)<")
-WANTED = (b"waypoint", b'"ACTUAL"', b"reportedPositionData", b"flightStatus>", b"Cancellation")
+WANTED = (b"waypoint", b"outeOfFlight", b'"ACTUAL"', b"reportedPositionData", b"flightStatus>", b"Cancellation")
 
 
 def _deg(a):
@@ -160,7 +164,9 @@ def parse(payload):
       3-letter US ones), status (PLANNED / ACTIVE / COMPLETED / CANCELLED), off (actual departure time),
       etd (planned), on (actual arrival), eta, path ([(lat, lon, seconds after departure)], TFMS's
       modelled trajectory along the filed route, gate to gate), ocean ((lat, lon, ft, time) of an oceanic
-      position report: where it was seen out of radar coverage), seen (time of a radar position).
+      position report: where it was seen out of radar coverage), seen (time of a radar position), route (the
+      filed route as text, e.g. KORD..NOONY..OBH..CHESZ.Q88.HAKMN.ANJLL4.KLAX), fixes ((name, seconds after
+      departure), the route's fixes in order: each is at the path point with the same time).
     Read with regular expressions, not an XML parser: TFMS sends ~40 of these a second, and this is ~10x faster."""
     out = []
     for m in MSG.finditer(payload):
@@ -202,6 +208,18 @@ def parse(payload):
                 pass
         if len(wps) > 1:
             r["path"] = [w[1:] for w in sorted(wps)]
+            fixes = []
+            for e, name in FIX.findall(body):
+                e = dict(ATTR.findall(e))
+                try:
+                    fixes.append((int(e.get("sequenceNumber") or 0), name.strip(), int(e.get("elapsedTime") or 0)))
+                except ValueError:
+                    pass
+            if fixes:
+                r["fixes"] = tuple(f[1:] for f in sorted(fixes))
+        rt = ROUTE.search(body)
+        if rt and rt[1].strip():
+            r["route"] = re.sub(r"/\d{4}$", "", rt[1].strip())     # less the trailing /HHMM (time en route)
         rep = REPORTED.search(body)
         if rep:
             d = [_deg(dict(ATTR.findall(e))) for e in DMS.findall(rep[0])]
@@ -216,13 +234,50 @@ def parse(payload):
 class Flights:
     """What TFMS says about every flight to, from or over the US, by callsign: its airports, times, filed
     trajectory and latest oceanic position report. Fed by Feed("tfms", ...)'s messages; flights are dropped
-    an hour after they land or are cancelled, or when nothing's been heard of them for 14 hours."""
-    KEEP, QUIET = 3600, 14 * 3600
+    an hour after they land or are cancelled, or when nothing's been heard of them for 14 hours.
+    A flight's route only comes with some of its messages (every half hour or so), so the lot is saved every
+    5 minutes (to the service's state directory, $STATE_DIRECTORY/swim-flights.pickle.gz, or the path given)
+    and read back on start when it's under 2 hours old: a restart doesn't lose them."""
+    KEEP, QUIET, SAVE_EVERY = 3600, 14 * 3600, 300
 
-    def __init__(self):
+    def __init__(self, path=None):
         self.lock = threading.Lock()
         self.refs, self.by_cs = {}, {}      # TFMS flight id -> flight; callsign -> {ids}
-        self.pruned = time.time()
+        self.pruned = self.saved = time.time()
+        state = (os.environ.get("STATE_DIRECTORY") or "").split(":")[0]
+        self.path = path or (os.path.join(state, "swim-flights.pickle.gz") if state else None)
+        self.load()
+
+    def load(self):
+        try:
+            if not self.path or not os.path.exists(self.path) or time.time() - os.path.getmtime(self.path) > 2 * 3600:
+                return
+            with gzip.open(self.path, "rb") as f:
+                refs = pickle.load(f)                    # our own file, in a directory only the service can write
+        except (OSError, EOFError, pickle.UnpicklingError, ValueError, AttributeError) as e:
+            print(f"livescope: SWIM: couldn't read {self.path}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            return
+        with self.lock:
+            self.refs = refs
+            for ref, f in refs.items():
+                self.by_cs.setdefault(f["cs"], set()).add(ref)
+        self.prune()
+        print(f"livescope: SWIM: {len(self.refs)} flights read back from {self.path}", file=sys.stderr, flush=True)
+
+    def save(self):
+        """called from the feed's thread, the only one that changes flights, so they hold still meanwhile"""
+        self.saved = time.time()
+        if not self.path:
+            return
+        try:
+            with self.lock:
+                refs = dict(self.refs)
+            tmp = self.path + ".tmp"
+            with gzip.open(tmp, "wb", compresslevel=1) as f:
+                pickle.dump(refs, f, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp, self.path)
+        except OSError as e:
+            print(f"livescope: SWIM: couldn't save {self.path}: {e}", file=sys.stderr, flush=True)
 
     def on_message(self, feed, payload):
         if feed != "tfms":
@@ -231,6 +286,8 @@ class Flights:
             self.add(r)
         if time.time() - self.pruned > 600:
             self.prune()
+        if time.time() - self.saved > self.SAVE_EVERY:
+            self.save()
 
     def add(self, r):
         ref, cs = r.get("ref"), r.get("cs")
@@ -244,11 +301,12 @@ class Flights:
                 self.by_cs.get(f["cs"], set()).discard(ref)
                 f["cs"] = cs
             self.by_cs.setdefault(cs, set()).add(ref)
-            for k in ("dep", "arr", "status", "off", "etd", "on", "eta", "ocean", "seen"):
+            for k in ("dep", "arr", "status", "off", "etd", "on", "eta", "ocean", "seen", "route"):
                 if r.get(k) is not None:
                     f[k] = r[k]
             if r.get("path"):                            # flat float32s: lat, lon, s, ... (a day's worth is ~25 MB)
                 f["path"] = array("f", [x for p in r["path"] for x in p])
+                f["fixes"] = r.get("fixes", ())
             f["t"] = time.time()
 
     def prune(self):
@@ -293,6 +351,23 @@ class Flights:
             p = f["path"]
             f["path"] = [(p[i], p[i + 1], p[i + 2]) for i in range(0, len(p), 3)]
         return f
+
+    def plan(self, cs):
+        """/api/live/fplan?cs=: a flight's filed plan for its card and the map: {dep, arr, route, status, off,
+        eta, plan: {pts: [[fix, lat, lon]], line: [[lat, lon]] (the whole trajectory, gate to gate)}}, or {}
+        when TFMS has none for it"""
+        f = self.get(cs)
+        if not f:
+            return {}
+        at = {round(p[2]): (round(p[0], 4), round(p[1], 4)) for p in f.get("path") or ()}
+        first = f["path"][0] if f.get("path") else None
+        pts = []
+        for name, el in f.get("fixes") or ():
+            p = at.get(el) or (first and el == 0 and (round(first[0], 4), round(first[1], 4)))
+            if p:
+                pts.append([name, *p])
+        line = [[round(p[0], 4), round(p[1], 4)] for p in f.get("path") or ()]
+        return {k: f[k] for k in ("dep", "arr", "route", "status", "off", "eta") if f.get(k)} | {"plan": {"pts": pts, "line": line}}
 
     def stats(self):
         with self.lock:
