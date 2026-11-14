@@ -1,4 +1,5 @@
 """livescope (https://livescope.kyleboas.com): real-world traffic from public ADS-B feeds."""
+import acars
 import adsb
 import boats
 import swim
@@ -44,6 +45,6 @@ def providers(airports=None):
     tl = timelapse.Timelapse(traffic, adsb.MAX_NM, world)
     ships = boats.Boats()
     return {"traffic": traffic, "world": world, "routes": routes, "atis": Atis(),
-            "max_nm": adsb.MAX_NM, "features": ["timelapse", "aircraft", "boats"] + (["fplan"] if fl else []),
-            "endpoints": {"timelapse": tl.endpoint, "aircraft": traffic.detail, "boats": ships.get,
+            "max_nm": adsb.MAX_NM, "features": ["timelapse", "aircraft", "acars", "boats"] + (["fplan"] if fl else []),
+            "endpoints": {"timelapse": tl.endpoint, "aircraft": traffic.detail, "boats": ships.get, "acars": acars.Acars().endpoint,
                           **({"fplan": lambda s: fl.plan(s("cs", 8))} if fl else {})}}
