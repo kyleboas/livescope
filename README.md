@@ -36,6 +36,13 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   feeders, newest first. Most are airline and FMS reports, but some are ATC: CPDLC (shown encoded, as sent),
   ATIS requests and oceanic or departure clearances. It only covers aircraft near a feeder or on SATCOM. The
   server asks airframes.io at most once a minute per aircraft (their anonymous API allows 60 requests a minute).
+- **Flight history and replay:** the aircraft card lists the aircraft's flights over the last 48 h (callsign,
+  from → to, times, duration, top altitude), and ▶ replays one on the scope: the whole track drawn, the aircraft
+  flown along it at 1× to 300× with the timelapse bar (scrub, pause, FOLLOW keeps it centred). `?fh=<hex>&t=<start>`
+  links to a replay. It comes from the world recording below ("The past"), so it's at OpenSky's detail (a position
+  every 90 s with an API client, eased between them) and only covers what OpenSky sees; over the oceans it uses
+  the estimates. Each finished hour of that recording is indexed by aircraft once (`recent-index/`, about the same
+  size again) so a lookup takes a few tens of ms; after a restart the hours are caught up in the background.
 - **ALL / ARR / DEP / ARR+DEP** (bottom right) greys out and untags everything except the picked
   airport's arrivals and/or departures.
   - ADS-B has no flight plan, so these are guessed from track, altitude and climb/descent. Traffic goes
@@ -128,6 +135,7 @@ hazards.py     TFRs (tfr.faa.gov), SIGMETs, G-AIRMETs, CWAs and PIREPs (aviation
 boats.py       ships from AIS (aisstream.io with a key, Fintraffic's Digitraffic without) for the Boats layer
 timelapse.py   records areas' traffic on the server and serves it back for playback
 acars.py       ACARS messages for the aircraft card, from airframes.io
+history.py     each aircraft's flights over the last 48 h, from the world recording, for the card and replays
 swim.py        FAA SWIM flight data: the SCDS queue (Solace's Python API) and TFMS flight plans by callsign
 tools/         swim_capture.py: saves a few minutes of a SWIM feed to look at
 ```
