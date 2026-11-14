@@ -11,7 +11,13 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
 - **Procedures:** US airports show their SIDs, STARs and approaches (FAA CIFP). Pick one in the airport
   card to highlight it with its fixes.
 - **Airport card:** frequencies, the current ATIS (FAA D-ATIS through atis.info, US only) and the latest
-  METAR (aviationweather.gov), plus a link to listen on LiveATC.net.
+  METAR (aviationweather.gov), plus LiveATC.net: its link opens LiveATC's page for the airport in a small window
+  beside the scope, which follows the airport you pick and closes from the header (LiveATC ✕). You pick a feed
+  there and it plays in LiveATC's own player; their terms rule out playing their streams on this page.
+- **Live audio:** airports listed in `SITE["audio"]` (`site.py`) get ▶ buttons in their card that play the
+  stream on the page; it keeps playing as you move around, and the header's ■ button stops it. Any stream
+  the browser can play works, e.g. your own receiver through Icecast. None are listed yet: LiveATC.net's
+  streams play fine but their terms forbid third-party use, so add theirs only with their permission.
 - **Ground maps:** zoomed in to an airport (GND / FLD), its taxiways, aprons, terminals and gates come
   from OpenStreetMap. The server fetches them once through Overpass, in the background, and caches them
   for 30 days in `livedata/ground/`. Taxiing aircraft leave history trails.

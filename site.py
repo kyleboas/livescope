@@ -14,6 +14,10 @@ SITE = {
     "src_links": {"adsb.lol": "https://adsb.lol", "adsb.fi": "https://adsb.fi"},
     "hex_link": ["https://adsb.lol/?icao={hex}", "{HEX} on adsb.lol"],
     "world_link": ["https://opensky-network.org", "OpenSky"],
+    # live audio in the airport card: ICAO -> [[label, stream URL], ...], any MP3/AAC/Ogg stream the browser can
+    # play (an Icecast mount from your own receiver, say). LiveATC.net's streams need their permission first:
+    # their terms forbid third-party use. e.g. {"KJFK": [["TWR 119.1", "https://…/kjfk_twr"]]}
+    "audio": {},
 }
 
 
