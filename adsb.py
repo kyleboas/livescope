@@ -237,7 +237,10 @@ class World:
     """Every aircraft on Earth (airborne and on the ground) for the zoomed-out globe, from OpenSky's /states/all (the free ADS-B
     feeds above only answer for 250 nm around a point). Anonymous use allows ~100 snapshots a day, so one
     every 15 minutes; with a free OpenSky API client (opensky-client-id / opensky-client-secret from agent-secrets
-    via deploy/install-service.sh, or OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET in the environment) one every 90 s. Fetched only while someone is looking, shared by everyone."""
+    via deploy/install-service.sh, or OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET in the environment) one every 90 s. Fetched only while someone is looking, shared by everyone.
+    The last good snapshot is kept in the service's state directory ($STATE_DIRECTORY/world.json.gz) and read back on
+    start, so a restart (each deploy) still has the world to show while OpenSky is rate-limiting (HTTP 429)."""
+    KEEP_S = 12 * 3600     # an older saved snapshot isn't worth showing
     URL = "https://opensky-network.org/api/states/all"
     TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 
@@ -254,6 +257,35 @@ class World:
         self.prev, self.lost = {}, {}
         self.token, self.token_exp = None, 0.0
         self.err, self.auth_retry = None, 0.0     # why the last fetch failed; when to try a rejected client again
+        state = (os.environ.get("STATE_DIRECTORY") or "").split(":")[0]
+        self.path = os.path.join(state, "world.json.gz") if state else None
+        self.load()
+
+    def load(self):
+        """The snapshot saved before the last restart, if it's recent; the next fetch waits out the rest of its interval."""
+        try:
+            with open(self.path, "rb") as f:
+                gz = f.read()
+            d = json.loads(gzip.decompress(gz))
+        except (OSError, TypeError, ValueError):
+            return
+        age = time.time() - (d.get("t") or 0)
+        if d.get("ok") and 0 <= age < self.KEEP_S:
+            d["every"] = self.every
+            self.body = json.dumps(d, separators=(",", ":")).encode()
+            self.gz = gzip.compress(self.body, 6)
+            self.prev = {r[0]: r for r in d.get("ac") or []}
+            self.next_at = time.time() + max(0, self.every - age)
+
+    def save(self, gz):
+        if not self.path:
+            return
+        try:
+            with open(self.path + ".tmp", "wb") as f:
+                f.write(gz)
+            os.replace(self.path + ".tmp", self.path)
+        except OSError as e:
+            print("livescope: couldn't save the world snapshot:", e, file=sys.stderr, flush=True)
 
     def auth(self):
         """The OpenSky client's bearer header. If OpenSky turns the client down (a wrong id or secret), fetch
@@ -296,6 +328,7 @@ class World:
             gz = gzip.compress(body, 6)
             with self.lock:
                 self.body, self.gz = body, gz
+            self.save(gz)
             if not self.auth_retry or time.time() >= self.auth_retry:
                 self.err = None
         except urllib.error.HTTPError as e:
