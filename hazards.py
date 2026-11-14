@@ -10,7 +10,8 @@ Nothing needs a key. The whole world is fetched (well under 1 MB) when someone a
 FRESH_S, in the background; the request gets the last copy straight away.
 
 /api/live/wx gives {ok, t, areas: [{k, id, name, hz, alt, from, to, text, poly: [[[lat, lon], ...], ...]}],
-pireps: [[lat, lon, fl (hundreds of ft) or -1, kind (0 AIREP, 1 PIREP, 2 urgent), obs time, raw, turbulence, icing]]}.
+pireps: [[lat, lon, fl (hundreds of ft) or -1, kind (0 AIREP, 1 PIREP, 2 urgent), obs time, raw, turbulence, icing]],
+err: {tfr: why there are none}}.
 k is tfr, sigmet, csigmet (convective), isigmet (international), airmet or cwa; from/to are unix seconds or null.
 """
 import calendar
@@ -85,6 +86,7 @@ class Hazards:
         self.tfrs, self.tfr_info = [], {}       # tfr areas; notam id -> details
         self.wxT = self.tfrT = 0.0
         self.busy = False
+        self.err = {}                           # source -> why it's missing (tfr.faa.gov refuses some hosting networks' IPs)
 
     def get(self, s=None):
         now = time.time()
@@ -115,10 +117,11 @@ class Hazards:
                     self.tfrT = now - TFR_S + 60
             w = self.wx
             self.out = {"ok": bool(self.wxT or self.tfrT), "t": round(time.time()),
-                        "areas": self.tfrs + w["sigmet"] + w["isigmet"] + w["airmet"] + w["cwa"], "pireps": w["pireps"]}
+                        "areas": self.tfrs + w["sigmet"] + w["isigmet"] + w["airmet"] + w["cwa"], "pireps": w["pireps"], "err": dict(self.err)}
         finally:
             with self.lock:
                 self.busy = False
+        self.err = {}                           # source -> why it's missing (tfr.faa.gov refuses some hosting networks' IPs)
 
     # ---------------------------------------------------------------- aviationweather.gov
     def awc(self, what):
@@ -199,7 +202,9 @@ class Hazards:
             shapes = json.loads(fetch(TFR_SHAPES, 40)).get("features") or []
         except Exception as e:  # noqa: BLE001
             print(f"livescope: tfr.faa.gov: {e}", flush=True)
+            self.err["tfr"] = f"tfr.faa.gov refused this server (HTTP {e.code})" if hasattr(e, "code") else "tfr.faa.gov didn't answer"
             return False
+        self.err.pop("tfr", None)
         by_id = {}
         for f in shapes:
             nid = (f.get("id") or "").partition(".")[2]
