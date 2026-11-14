@@ -65,6 +65,8 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
     Atlantic Tracks (from natTrak, refreshed every 30 min) follows that track's waypoints, then heads for its
     scheduled destination. Hovering it shows e.g. `→ KJFK via NAT C`. Anything else heads straight for its
     scheduled destination, or carries straight on.
+  - The estimates are drawn zoomed in too (where the live feed doesn't have the aircraft), so the oceans aren't empty
+    up close. The server saves them with the world snapshot, so a restart carries them on instead of starting over.
 - **Boats:** the Layers menu's *Boats (AIS)* (off by default) shows ships from AIS: small hulls pointing
   along their heading, carried on at their speed, with names with the
   data tags. Hover or click one for its name, type, speed and course, destination and MMSI.

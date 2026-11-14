@@ -239,7 +239,9 @@ class World:
     every 15 minutes; with a free OpenSky API client (opensky-client-id / opensky-client-secret from agent-secrets
     via deploy/install-service.sh, or OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET in the environment) one every 90 s. Fetched only while someone is looking, shared by everyone.
     The last good snapshot is kept in the service's state directory ($STATE_DIRECTORY/world.json.gz) and read back on
-    start, so a restart (each deploy) still has the world to show while OpenSky is rate-limiting (HTTP 429)."""
+    start, so a restart (each deploy) still has the world to show while OpenSky is rate-limiting (HTTP 429). So are the
+    aircraft being estimated over the oceans (world-lost.json.gz), which otherwise only come back as aircraft newly
+    leave coverage, hours after a restart."""
     KEEP_S = 12 * 3600     # an older saved snapshot isn't worth showing
     URL = "https://opensky-network.org/api/states/all"
     TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
@@ -259,6 +261,7 @@ class World:
         self.err, self.auth_retry = None, 0.0     # why the last fetch failed; when to try a rejected client again
         state = (os.environ.get("STATE_DIRECTORY") or "").split(":")[0]
         self.path = os.path.join(state, "world.json.gz") if state else None
+        self.lost_path = os.path.join(state, "world-lost.json.gz") if state else None
         self.load()
 
     def load(self):
@@ -276,14 +279,23 @@ class World:
             self.gz = gzip.compress(self.body, 6)
             self.prev = {r[0]: r for r in d.get("ac") or []}
             self.next_at = time.time() + max(0, self.every - age)
+            try:
+                with open(self.lost_path, "rb") as f:
+                    lost = json.loads(gzip.decompress(f.read()))
+                if isinstance(lost, dict):
+                    self.lost = lost
+            except (OSError, TypeError, ValueError):
+                pass
 
     def save(self, gz):
         if not self.path:
             return
         try:
-            with open(self.path + ".tmp", "wb") as f:
-                f.write(gz)
-            os.replace(self.path + ".tmp", self.path)
+            lost = gzip.compress(json.dumps(self.lost, separators=(",", ":")).encode(), 6)
+            for path, data in ((self.path, gz), (self.lost_path, lost)):
+                with open(path + ".tmp", "wb") as f:
+                    f.write(data)
+                os.replace(path + ".tmp", path)
         except OSError as e:
             print("livescope: couldn't save the world snapshot:", e, file=sys.stderr, flush=True)
 
