@@ -72,13 +72,13 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
     (sign in at <https://aisstream.io>, then API Keys; `sudo secret livescope aisstream-key`, then rerun
     `sudo bash deploy/install-service.sh`, or `AISSTREAM_KEY` locally). Without one, only the Baltic around Finland
     (Fintraffic's Digitraffic, no key needed). Boats aren't in timelapses.
-- **Airspace and weather:** the Layers menu's *Airspace and weather* group (all off by default) draws TFRs (US, from
-  tfr.faa.gov: red, dimmer until they start), SIGMETs (US, convective ones in magenta, and international), G-AIRMETs (US:
-  IFR, mountain obscuration, turbulence, icing, surface wind, low-level wind shear), Center Weather Advisories (US) and
-  PIREPs from the last 2 h (triangles, filled when they report turbulence or icing, red when urgent; airline AIREPs as
-  dots, a separate toggle). Click inside an area or on a report for its full text, times and altitudes. The server
-  fetches it all, worldwide and keyless, every 5 min (TFRs every 10) while someone has a layer on. Other NOTAMs aren't
-  shown: the FAA's only NOTAM feed now is its NMS API, which needs credentials the FAA hands out on request.
+- **Weather:** the Layers menu's *Weather* group (all off by default) draws SIGMETs (US, convective ones in magenta, and
+  international), G-AIRMETs (US: IFR, mountain obscuration, turbulence, icing, surface wind, low-level wind shear), Center
+  Weather Advisories (US) and PIREPs from the last 2 h (triangles, filled when they report turbulence or icing, red when
+  urgent; airline AIREPs as dots, a separate toggle). Click inside an area or on a report for its full text, times and
+  altitudes. The server fetches it all, worldwide and keyless, every 5 min while someone has a layer on. No TFRs or other
+  NOTAMs: tfr.faa.gov refuses the server's hosting network, and the FAA's only NOTAM feed now is its NMS API, which needs
+  credentials the FAA hands out on request.
 - **Timelapses:** the clock button (top right) records the area in view on the server: one snapshot
   every 5 s, for 15 min to 24 h, carrying on with nobody watching. Any recording plays back in the scope at
   10× to 600×, eased between snapshots, with a scrubber; you can still pan, zoom, filter and click aircraft.
@@ -133,7 +133,7 @@ lag or have gaps; SCDS disables a subscription after 60 days without a connectio
 deploy/        install-service.sh: the system service, its secrets and auto-deploy
 site.py        the site's settings and which providers it uses
 adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates (filed routes, North Atlantic Tracks), routes
-hazards.py     TFRs (tfr.faa.gov), SIGMETs, G-AIRMETs, CWAs and PIREPs (aviationweather.gov) for the airspace and weather layers
+hazards.py     SIGMETs, G-AIRMETs, CWAs and PIREPs (aviationweather.gov) for the weather layers
 boats.py       ships from AIS (aisstream.io with a key, Fintraffic's Digitraffic without) for the Boats layer
 timelapse.py   records areas' traffic on the server and serves it back for playback
 acars.py       ACARS messages for the aircraft card, from airframes.io
