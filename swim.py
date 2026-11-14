@@ -153,26 +153,34 @@ def _deg(a):
 
 def parse(payload):
     """A TFMS flight-data message (tfmDataService XML, a batch of fltdMessages) as a list of dicts, one per
-    flight message that says something livescope keeps (most are radar positions over the US, which ADS-B
-    already has: those are skipped), holding what it says (only the keys it has):
+    flight message that says something livescope keeps, holding what it says (only the keys it has). Most
+    are radar positions over the US, which ADS-B already has: of those only the time is kept (seen), as
+    word that the flight is in the air.
       cs, ref (TFMS's flight id), kind (msgType), t (its time), dep, arr (airport codes, ICAO but for some
       3-letter US ones), status (PLANNED / ACTIVE / COMPLETED / CANCELLED), off (actual departure time),
       etd (planned), on (actual arrival), eta, path ([(lat, lon, seconds after departure)], TFMS's
       modelled trajectory along the filed route, gate to gate), ocean ((lat, lon, ft, time) of an oceanic
-      position report: where it was seen out of radar coverage).
+      position report: where it was seen out of radar coverage), seen (time of a radar position).
     Read with regular expressions, not an XML parser: TFMS sends ~40 of these a second, and this is ~10x faster."""
     out = []
     for m in MSG.finditer(payload):
         body = m[2]
-        if not any(w in body for w in WANTED):
+        wanted = any(w in body for w in WANTED)
+        if not wanted and b'"trackInformation"' not in m[1]:
             continue
-        a, body = dict(ATTR.findall(m[1].decode("utf-8", "replace"))), body.decode("utf-8", "replace")
+        a = dict(ATTR.findall(m[1].decode("utf-8", "replace")))
         r = {"cs": (a.get("acid") or "").strip().upper(), "ref": a.get("flightRef"), "kind": a.get("msgType"),
              "t": _ts(a.get("sourceTimeStamp"))}
         if a.get("depArpt"):
             r["dep"] = a["depArpt"].upper()
         if a.get("arrArpt"):
             r["arr"] = a["arrArpt"].upper()
+        if r["kind"] == "trackInformation":
+            r["seen"] = r["t"]
+        if not wanted:                                 # a radar position: just that it's flying
+            out.append(r)
+            continue
+        body = body.decode("utf-8", "replace")
         for rx, typ, actual, planned in ((ETD, "etdType", "off", "etd"), (ETA, "etaType", "on", "eta")):
             for e in rx.findall(body):
                 e = dict(ATTR.findall(e))
@@ -236,7 +244,7 @@ class Flights:
                 self.by_cs.get(f["cs"], set()).discard(ref)
                 f["cs"] = cs
             self.by_cs.setdefault(cs, set()).add(ref)
-            for k in ("dep", "arr", "status", "off", "etd", "on", "eta", "ocean"):
+            for k in ("dep", "arr", "status", "off", "etd", "on", "eta", "ocean", "seen"):
                 if r.get(k) is not None:
                     f[k] = r[k]
             if r.get("path"):                            # flat float32s: lat, lon, s, ... (a day's worth is ~25 MB)
@@ -258,7 +266,8 @@ class Flights:
                             del self.by_cs[f["cs"]]
 
     def get(self, cs, now=None):
-        """the flight flying under this callsign now (airborne: departed, or reported over the ocean, and not landed), else the one due
+        """the flight flying under this callsign now (airborne: departed, or on radar or reported over the ocean
+        lately, and not landed), else the one due
         off within 3 hours either side of now, else None. A copy, path as [(lat, lon, s)]."""
         now = now or time.time()
         with self.lock:
@@ -267,7 +276,8 @@ class Flights:
                 f = self.refs[ref]
                 if f.get("status") == "CANCELLED":
                     continue
-                up = f.get("off") or (f["ocean"][3] if f.get("ocean") and now - f["ocean"][3] < 6 * 3600 else None)
+                up = f.get("off") or (f["ocean"][3] if f.get("ocean") and now - f["ocean"][3] < 6 * 3600 else None) \
+                    or (f["seen"] if f.get("seen") and now - f["seen"] < 1800 else None)
                 if up and not f.get("on") and f.get("status") != "COMPLETED" and now - up < 20 * 3600:
                     k = (0, -up)
                 elif f.get("etd") and abs(f["etd"] - now) < 3 * 3600 and not f.get("off"):
