@@ -57,7 +57,7 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
     scheduled destination. Hovering it shows e.g. `→ KJFK via NAT C`. Anything else heads straight for its
     scheduled destination, or carries straight on.
 - **Boats:** the Layers menu's *Boats (AIS)* (off by default) shows ships from AIS: small hulls pointing
-  along their heading, carried on at their speed, with a five-minute course line when zoomed in and names with the
+  along their heading, carried on at their speed, with names with the
   data tags. Hover or click one for its name, type, speed and course, destination and MMSI.
   - Worldwide (wherever volunteers' coastal receivers reach) from aisstream.io, once the server has a free API key
     (sign in at <https://aisstream.io>, then API Keys; `sudo secret livescope aisstream-key`, then rerun
