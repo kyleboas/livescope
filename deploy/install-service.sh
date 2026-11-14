@@ -5,6 +5,10 @@
 #   sudo secret livescope opensky-client-secret
 #   sudo bash deploy/install-service.sh       # run again after adding or changing the secrets
 #
+# FAA SWIM flight data (optional, see swim.py), per subscription (tfms, sfdps) from the SWIFT Portal:
+#   sudo secret livescope swim-tfms-username; sudo secret livescope swim-tfms-password; sudo secret livescope swim-tfms-queue
+# It also installs Solace's Python library (solace-pubsubplus, checked against its PyPI hash) in /opt/livescope-pylib.
+#
 # The secrets stay root-only in /etc/agent-secrets/projects/livescope/. systemd hands them to the service
 # (LoadCredential) at start. The service runs as its own throwaway user (DynamicUser), not as the agent
 # user, sees only the scope and livescope checkouts read-only, and writes only /var/lib/livescope
@@ -25,7 +29,8 @@ SECRETS=/etc/agent-secrets/projects/livescope
 UNIT=/etc/systemd/system/livescope.service
 
 creds=""
-for name in opensky-client-id opensky-client-secret; do
+for name in opensky-client-id opensky-client-secret \
+            swim-{tfms,sfdps}-{username,password,queue,url}; do
   f="$SECRETS/$name.secret"
   if [[ -f "$f" ]]; then
     creds+="LoadCredential=$name:$f"$'\n'
@@ -33,6 +38,31 @@ for name in opensky-client-id opensky-client-secret; do
   fi
 done
 [[ -n "$creds" ]] || echo "note: no OpenSky client in $SECRETS; the globe updates every 15 min instead of 90 s" >&2
+
+# Solace's Python API for SWIM: one wheel, no dependencies, unpacked (no pip on the server) and checked by hash
+PYLIB=/opt/livescope-pylib
+SOLACE_VER=1.12.0
+case "$(uname -m)" in
+  x86_64)  WHL=solace_pubsubplus-$SOLACE_VER-py36-none-manylinux_2_12_x86_64.whl
+           WHL_URL=https://files.pythonhosted.org/packages/c7/55/b7d31795fbcbec2a728a2e623bbe8ee9e53e11df7ce62f2f9df52a19c4a2/$WHL
+           WHL_SHA=b8a8e1cb35db27104cb790075b8731d6b9cd7a3bc3e3448f5a6cd73d44746e18 ;;
+  aarch64) WHL=solace_pubsubplus-$SOLACE_VER-py36-none-manylinux_2_17_aarch64.whl
+           WHL_URL=https://files.pythonhosted.org/packages/21/2f/9d4ba4f54be24a617f66850d749dcb4dd638a12e0243f8b725875c6e081c/$WHL
+           WHL_SHA=a1d6dcfd8d24b36f9727f06986b13a5bde1323a30d4eee5ebd60decf224b0db2 ;;
+  *) WHL= ;;
+esac
+if [[ -n "$WHL" && ! -f "$PYLIB/.$WHL" ]]; then
+  tmp="$(mktemp -d)"
+  if curl -fsSL -o "$tmp/$WHL" "$WHL_URL" && echo "$WHL_SHA  $tmp/$WHL" | sha256sum -c --quiet -; then
+    rm -rf "$PYLIB" && mkdir -p "$PYLIB"
+    python3 -I -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$tmp/$WHL" "$PYLIB"
+    touch "$PYLIB/.$WHL" && chmod -R a+rX "$PYLIB"
+    echo "installed solace-pubsubplus $SOLACE_VER in $PYLIB"
+  else
+    echo "warning: couldn't download or verify solace-pubsubplus; SWIM stays off" >&2
+  fi
+  rm -rf "$tmp"
+fi
 
 cat > "$UNIT" <<UNIT
 [Unit]
@@ -44,7 +74,7 @@ Wants=network-online.target
 Type=simple
 DynamicUser=true
 ${creds}EnvironmentFile=-/etc/livescope.env
-Environment=SCOPE_GROUND_DIR=/var/lib/livescope/ground LIVESCOPE_TIMELAPSE_DIR=/var/lib/livescope/timelapse
+Environment=SCOPE_GROUND_DIR=/var/lib/livescope/ground LIVESCOPE_TIMELAPSE_DIR=/var/lib/livescope/timelapse PYTHONPATH=$PYLIB
 StateDirectory=livescope
 ProtectHome=tmpfs
 BindReadOnlyPaths=$SCOPE $SITE

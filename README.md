@@ -91,6 +91,8 @@ deploy/        install-service.sh: the system service, its secrets and auto-depl
 site.py        the site's settings and which providers it uses
 adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates (North Atlantic Tracks), adsbdb routes
 timelapse.py   records areas' traffic on the server and serves it back for playback
+swim.py        FAA SWIM flight data (SCDS queues through Solace's Python API); not wired in yet
+tools/         swim_capture.py: saves a few minutes of a SWIM feed to look at
 ```
 
 ATIS and METARs come from scope's `scope/weather.py`. Not for navigation. Data sources: [NOTICE.md](NOTICE.md). MIT ([LICENSE](LICENSE)).
