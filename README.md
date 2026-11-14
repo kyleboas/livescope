@@ -40,7 +40,7 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   from → to, times, duration, top altitude), and ▶ replays one on the scope: the whole track drawn, the aircraft
   flown along it at 1× to 300× with the timelapse bar (scrub, pause, FOLLOW keeps it centred). TRAFFIC shows the
   other aircraft that were within 60 nm of it along the way (`?a=around&hex=&t0=&t1=&nm=` on the same endpoint), and
-  PROFILE charts its altitude and ground speed over the flight under the scope (hover to read, press or drag to
+  PROFILE charts its altitude and ground speed over the flight in the info panel (hover to read, press or drag to
   jump the replay there). `?fh=<hex>&t=<start>` links to a replay. It comes from the world recording below ("The past"), so it's at OpenSky's detail (a position
   every 90 s with an API client, eased between them) and only covers what OpenSky sees; over the oceans it uses
   the estimates. Each finished hour of that recording is indexed by aircraft once (`recent-index/`, about the same
