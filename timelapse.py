@@ -3,7 +3,7 @@
 A recording is of the view being looked at (up to MAX_ACTIVE at once, MAX_H hours each), and everyone can
 watch every recording. With $LIVESCOPE_TIMELAPSE_KEY set, starting and stopping one takes that key
 (key=...); without it, anyone can. Recording runs on the server, so it carries on with nobody
-looking. Recordings are kept KEEP_DAYS days, and the oldest are dropped past MAX_MB on disk.
+looking. Recordings are deleted KEEP_H hours after they finish, and the oldest sooner past MAX_MB on disk.
 
 A recording is either of an area (kind "area": the live ADS-B feed, up to 250 nm, every INTERVAL_S) or of
 the whole world (kind "world": OpenSky's worldwide snapshot, every 90 s with an OpenSky API client, else
@@ -41,11 +41,11 @@ from scope.core import HERE
 INTERVAL_S = 5          # one snapshot every this many seconds
 MAX_ACTIVE = 4          # recordings at once (each costs one upstream request per snapshot)
 MAX_H = 24
-KEEP_DAYS = 30
+KEEP_H = 48            # a finished recording is deleted this long after it ends
 MAX_MB = 4000
 MAX_FRAMES = 2000       # snapshots per frames request (an area's)
 MAX_WORLD_FRAMES = 12   # world snapshots per frames request (each is ~10,000 aircraft)
-ROLL_ID, ROLL_H = "recent", 24   # the always-on world recording, and how many hours back it keeps
+ROLL_ID, ROLL_H = "recent", 48   # the always-on world recording, and how many hours back it keeps
 
 
 def read_members(path):
@@ -170,7 +170,7 @@ class Timelapse:
         self.roll(now)
         with self.lock:
             old = sorted(self.recs.values(), key=lambda r: r["start"])
-            drop = [r for r in old if r["until"] < now - KEEP_DAYS * 86400]
+            drop = [r for r in old if r["until"] < now - KEEP_H * 3600]
             size = sum(self.size(r) for r in old)
             for r in old:
                 if size <= MAX_MB * 1e6:
@@ -236,7 +236,7 @@ class Timelapse:
         if a == "list":
             with self.lock:
                 return {"recs": [self.public(r, now) for r in sorted(self.recs.values(), key=lambda r: -r["start"])],
-                        "max_active": MAX_ACTIVE, "roll_h": ROLL_H if ROLL_ID in self.recs else 0, "max_h": MAX_H, "need_key": bool(self.key),
+                        "max_active": MAX_ACTIVE, "keep_h": KEEP_H, "roll_h": ROLL_H if ROLL_ID in self.recs else 0, "max_h": MAX_H, "need_key": bool(self.key),
                         "world_every": self.world.every if self.world else None}
         if a in ("check", "start", "stop") and not self.key_ok(s("key", 200)):
             return {"error": "wrong key", "bad_key": True}
