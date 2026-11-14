@@ -204,7 +204,8 @@ class Hazards:
         for f in shapes:
             nid = (f.get("id") or "").partition(".")[2]
             if nid in active:
-                by_id.setdefault(nid, []).extend(rings(f.get("geometry")))
+                got = by_id.setdefault(nid, [])
+                got += [r for r in rings(f.get("geometry")) if r not in got]     # the same shape can come more than once
         new = [n for n in by_id if n not in self.tfr_info]
         with ThreadPoolExecutor(6) as ex:
             for nid, d in zip(new, ex.map(self.tfr_detail, new)):
