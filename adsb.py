@@ -241,8 +241,8 @@ class World:
     URL = "https://opensky-network.org/api/states/all"
     TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 
-    def __init__(self, routes):
-        self.routes = routes
+    def __init__(self, routes, flights=None):
+        self.routes, self.flights = routes, flights      # flights: swim.Flights (FAA TFMS), or None
         self.nat = NatTracks()
         self.lock = threading.Lock()
         self.cid, self.secret = credential("opensky-client-id") or None, credential("opensky-client-secret")
@@ -320,7 +320,9 @@ class World:
 
     def estimate(self, t, ac):
         """Aircraft that were cruising and then dropped out of every receiver's range (mostly over the oceans,
-        where there's no free ADS-B), carried on at their last ground speed: along the North Atlantic Track
+        where there's no free ADS-B), carried on at their last ground speed: along their filed route (FAA
+        TFMS, flights to, from or over the US, when they were on it; from their latest oceanic position report
+        if there's one since), else along the North Atlantic Track
         they were lined up on (then to their scheduled destination, or straight on), else toward their
         scheduled destination (adsbdb route, when it fits their track), else straight on. A guess, drawn as
         such; dropped when the aircraft is seen again, reaches its destination, comes over an area with
@@ -349,7 +351,25 @@ class World:
             dist = v["gs"] * dt / 3600
             rt, to, nat = routes.get((v["cs"] or "").upper()), "", v.get("nat")
             dst = (rt[3], rt[4], rt[5]) if rt and rt[4] is not None and rt[5] is not None else None
-            if nat:
+            fp = self.flights.get(v["cs"], t) if self.flights and v["cs"] else None
+            filed = None
+            if fp and fp.get("path"):
+                pts = [(p[0], p[1]) for p in fp["path"]]
+                oc = fp.get("ocean")
+                if oc and v["ts"] + 60 < oc[3] <= t + 60:     # reported over the ocean since: go on from there
+                    b, hit = (oc[0], oc[1], oc[3]), on_route(pts, oc[0], oc[1], None, 60)
+                else:
+                    b, hit = (v["lat"], v["lon"], v["ts"]), on_route(pts, v["lat"], v["lon"], v["trk"])
+                if hit:
+                    filed = [(b[0], b[1])] + pts[hit:], v["gs"] * max(0, t - b[2]) / 3600
+            if filed:
+                pos = along_path(*filed)
+                if pos is None or pos[3] < 40:             # there (or nearly: it'll be seen on approach)
+                    del self.lost[hx]
+                    continue
+                la, lo, trk = pos[:3]
+                to = f"{fp['arr']}, filed route" if fp.get("arr") else "filed route"
+            elif nat:
                 path = [(v["lat"], v["lon"])] + nat[1]
                 end = path[-1]
                 if dst and gc_nm(*end, dst[1], dst[2]) > 30 and \
@@ -411,6 +431,26 @@ def along_path(path, nm):
             return la, lo, gc_brg(la, lo, *b), seg - nm + sum(gc_nm(*p, *q) for p, q in zip(path[i + 1:], path[i + 2:]))
         nm -= seg
     return None
+
+
+def on_route(path, lat, lon, trk=None, xt_max=30):
+    """the index of the next point of a route of (lat, lon) points for an aircraft at (lat, lon): the one
+    ending the segment it's closest beside (within xt_max nm, and heading along it if trk is given), or None"""
+    best = None
+    for i, (a, b) in enumerate(zip(path, path[1:])):
+        seg = gc_nm(*a, *b)
+        if seg < 0.5:
+            continue
+        brg = gc_brg(*a, *b)
+        xt, at = xt_at(*a, brg, lat, lon)
+        if not (-10 <= at <= seg + 10 and abs(xt) <= xt_max) or (best and abs(xt) >= best[1]):
+            continue
+        if trk is not None:
+            here = gc_dest(*a, brg, min(max(at, 0), seg - 0.1))
+            if abs((trk - gc_brg(*here, *b) + 540) % 360 - 180) > 45:
+                continue
+        best = (i + 1 if at < seg - 1 else i + 2, abs(xt))
+    return best[0] if best and best[0] < len(path) else None
 
 
 def xt_at(lat, lon, brg, plat, plon):
@@ -514,13 +554,15 @@ class NatTracks:
 
 
 class Routes:
-    """Scheduled routes by callsign from adsbdb.com (crowd-sourced, so sometimes out of date: the page only
-    believes one when the aircraft's position and climb/descent fit it). Looked up in the background,
-    a few a second, and kept for 6 hours (unknown callsigns for 1)."""
+    """Routes by callsign: the flight's own airports from FAA TFMS when it has them (flights to, from or over
+    the US, airborne or due off within 3 hours), else the scheduled route from adsbdb.com (crowd-sourced, so
+    sometimes out of date: the page only believes one when the aircraft's position and climb/descent fit it),
+    looked up in the background, a few a second, and kept for 6 hours (unknown callsigns for 1)."""
     URL = "https://api.adsbdb.com/v0/callsign/{}"
     TTL, TTL_NONE, PER_S = 6 * 3600, 3600, 4
 
-    def __init__(self):
+    def __init__(self, flights=None, airports=None):
+        self.flights, self.airports = flights, airports   # swim.Flights, scope.core.Airports (both optional)
         self.lock = threading.Lock()
         self.cache = {}            # callsign -> (time, [orig, olat, olon, dest, dlat, dlon] or None)
         self.queue = []
@@ -560,13 +602,35 @@ class Routes:
                     self.cache[cs] = (time.time(), r)
             time.sleep(1 / self.PER_S)
 
+    def airport(self, code, p):
+        """(ident, lat, lon) of a TFMS airport code (3-letter US ones are FAA codes), from the airport list,
+        else where its trajectory starts or ends (p), else no position"""
+        a = self.airports and (self.airports.one(code) or (len(code) == 3 and self.airports.one("K" + code)))
+        if a:
+            return [a[0], a[5], a[6]]
+        return [code, round(p[0], 4), round(p[1], 4)] if p else [code, None, None]
+
+    def filed(self, cs, now):
+        f = self.flights.get(cs, now) if self.flights else None
+        if not f or not f.get("dep") or not f.get("arr"):
+            return None
+        p = f.get("path")
+        return self.airport(f["dep"], p and p[0]) + self.airport(f["arr"], p and p[-1])
+
     def get(self, callsigns, background=False):
         """known routes now; unknown ones are queued (a page's asks ahead of background ones) and show up on a later call"""
         now, out = time.time(), {}
+        filed = {}
+        for cs in callsigns:
+            cs = cs.strip().upper()
+            r = self.filed(cs, now) if cs.isalnum() and len(cs) <= 8 else None
+            if r:
+                filed[cs] = r
+        out.update(filed)
         with self.lock:
             for cs in callsigns:
                 cs = cs.strip().upper()
-                if not cs.isalnum() or len(cs) > 8:
+                if not cs.isalnum() or len(cs) > 8 or cs in filed:
                     continue
                 hit = self.cache.get(cs)
                 if hit and hit[0] and now - hit[0] < (self.TTL if hit[1] else self.TTL_NONE):

@@ -31,7 +31,9 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   airport's arrivals and/or departures.
   - ADS-B has no flight plan, so these are guessed from track, altitude and climb/descent. Traffic goes
     to a nearby airport when it fits that one better.
-  - Scheduled routes from adsbdb.com take precedence when the aircraft's position fits them.
+  - Real routes take precedence when the aircraft's position fits them. For flights to, from or over the US
+    these are the flight's own airports from FAA SWIM (TFMS) when the server is subscribed, else scheduled
+    routes from adsbdb.com.
 - **ALT min–max** (header) greys out and untags traffic outside the band. It takes hundreds of feet,
   feet or FL350.
 - **Worldwide traffic:** zoomed out past the 250 nm the live feeds cover, the globe shows every
@@ -39,7 +41,9 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   - Anonymously, that's one snapshot every 15 min. Set `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`
     (a free OpenSky API client) to get one every 90 s.
   - No free feed covers the oceans, so airliners that leave every receiver's range at cruise are
-    carried on as estimates (hollow rings). Over the North Atlantic, one lined up on one of the day's North
+    carried on as estimates (hollow rings). One with a flight plan in FAA SWIM (TFMS: flights to, from or over
+    the US) follows its filed route, picking up from its latest oceanic position report when there's a newer
+    one. Hovering it shows e.g. `→ KMIA, filed route`. Otherwise, over the North Atlantic, one lined up on one of the day's North
     Atlantic Tracks (from natTrak, refreshed every 30 min) follows that track's waypoints, then heads for its
     scheduled destination. Hovering it shows e.g. `→ KJFK via NAT C`. Anything else heads straight for its
     scheduled destination, or carries straight on.
@@ -84,14 +88,21 @@ client from agent-secrets (`sudo secret livescope opensky-client-id`, `sudo secr
 opensky-client-secret`, then `sudo bash deploy/install-service.sh`) and pulls both repos every minute, so a
 push to GitHub deploys.
 
+FAA SWIM flight data needs a free SWIFT Portal account (<https://portal.swim.faa.gov>) and a TFMS
+subscription to R14 Flight Data. Save its connection details on the server with `sudo secret livescope
+swim-tfms-username`, `swim-tfms-password` and `swim-tfms-queue`, then rerun `sudo bash
+deploy/install-service.sh`. That also installs Solace's Python library, which SCDS queues need.
+Without the subscription, everything works as before. SWIM data is for non-operational use and may
+lag or have gaps; SCDS disables a subscription after 60 days without a connection.
+
 ## Files
 
 ```
 deploy/        install-service.sh: the system service, its secrets and auto-deploy
 site.py        the site's settings and which providers it uses
-adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates (North Atlantic Tracks), adsbdb routes
+adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates (filed routes, North Atlantic Tracks), routes
 timelapse.py   records areas' traffic on the server and serves it back for playback
-swim.py        FAA SWIM flight data (SCDS queues through Solace's Python API); not wired in yet
+swim.py        FAA SWIM flight data: the SCDS queue (Solace's Python API) and TFMS flight plans by callsign
 tools/         swim_capture.py: saves a few minutes of a SWIM feed to look at
 ```
 

@@ -1,5 +1,6 @@
 """livescope (https://livescope.kyleboas.com): real-world traffic from public ADS-B feeds."""
 import adsb
+import swim
 import timelapse
 from scope.weather import Atis
 
@@ -21,10 +22,24 @@ SITE = {
 }
 
 
-def providers():
+def flights():
+    """FAA TFMS flight data (swim.Flights) when its SCDS subscription is set up on this server, else None"""
+    cfg = swim.config("tfms")
+    if not cfg:
+        return None
+    if not swim.available():
+        print("livescope: SWIM tfms is configured but the Solace library isn't installed (deploy/install-service.sh)", flush=True)
+        return None
+    fl = swim.Flights()
+    swim.Feed("tfms", cfg, fl.on_message)
+    return fl
+
+
+def providers(airports=None):
     """The site's data: traffic is required; world, routes and atis are optional (left out = feature off)."""
-    routes, traffic = adsb.Routes(), adsb.Traffic()
-    world = adsb.World(routes)
+    fl = flights()
+    routes, traffic = adsb.Routes(fl, airports), adsb.Traffic()
+    world = adsb.World(routes, fl)
     tl = timelapse.Timelapse(traffic, adsb.MAX_NM, world)
     return {"traffic": traffic, "world": world, "routes": routes, "atis": Atis(),
             "max_nm": adsb.MAX_NM, "features": ["timelapse", "aircraft"],

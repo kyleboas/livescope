@@ -9,10 +9,13 @@ SWIM_TFMS_USERNAME etc.):
 <feed> is tfms (VPN TFMS) or sfdps (VPN FDPS). A feed without them, or a server without the library, is off.
 The username and queue name hold the account's e-mail address, so they're kept out of the repository too.
 """
+import calendar
 import os
+import re
 import sys
 import threading
 import time
+from array import array
 
 URL = "tcps://ems2.swim.faa.gov:55443"
 VPNS = {"tfms": "TFMS", "sfdps": "FDPS"}
@@ -119,6 +122,171 @@ class Feed:
                     pass
                 time.sleep(wait)
                 wait = min(600, wait * 2)
+
+
+def _ts(s):
+    try:
+        return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _tag(name):
+    return re.compile(r"<(?:[\w.-]+:)?%s\b([^>]*)>" % name)
+
+
+MSG = re.compile(rb"<(?:[\w.-]+:)?fltdMessage\b([^>]*)>(.*?)</(?:[\w.-]+:)?fltdMessage>", re.S)
+ATTR = re.compile(r'([\w:.-]+)="([^"]*)"')
+ETD, ETA, WAYPOINT, DMS = _tag("etd"), _tag("eta"), _tag("waypoint"), _tag("(?:latitude|longitude)DMS")
+STATUS = re.compile(r"<(?:[\w.-]+:)?flightStatus>\s*(\w+)")
+REPORTED = re.compile(r"<(?:[\w.-]+:)?reportedPositionData\b.*?</(?:[\w.-]+:)?reportedPositionData>", re.S)
+ALTITUDE = re.compile(r"<(?:[\w.-]+:)?altitude>\s*(\d+)\s*<")
+TIME = re.compile(r"<(?:[\w.-]+:)?time>([^<]+)<")
+WANTED = (b"waypoint", b'"ACTUAL"', b"reportedPositionData", b"flightStatus>", b"Cancellation")
+
+
+def _deg(a):
+    """a TFMS latitudeDMS / longitudeDMS element's attributes in degrees"""
+    v = int(a.get("degrees") or 0) + int(a.get("minutes") or 0) / 60 + int(a.get("seconds") or 0) / 3600
+    return -v if a.get("direction") in ("SOUTH", "WEST") else v
+
+
+def parse(payload):
+    """A TFMS flight-data message (tfmDataService XML, a batch of fltdMessages) as a list of dicts, one per
+    flight message that says something livescope keeps (most are radar positions over the US, which ADS-B
+    already has: those are skipped), holding what it says (only the keys it has):
+      cs, ref (TFMS's flight id), kind (msgType), t (its time), dep, arr (airport codes, ICAO but for some
+      3-letter US ones), status (PLANNED / ACTIVE / COMPLETED / CANCELLED), off (actual departure time),
+      etd (planned), on (actual arrival), eta, path ([(lat, lon, seconds after departure)], TFMS's
+      modelled trajectory along the filed route, gate to gate), ocean ((lat, lon, ft, time) of an oceanic
+      position report: where it was seen out of radar coverage).
+    Read with regular expressions, not an XML parser: TFMS sends ~40 of these a second, and this is ~10x faster."""
+    out = []
+    for m in MSG.finditer(payload):
+        body = m[2]
+        if not any(w in body for w in WANTED):
+            continue
+        a, body = dict(ATTR.findall(m[1].decode("utf-8", "replace"))), body.decode("utf-8", "replace")
+        r = {"cs": (a.get("acid") or "").strip().upper(), "ref": a.get("flightRef"), "kind": a.get("msgType"),
+             "t": _ts(a.get("sourceTimeStamp"))}
+        if a.get("depArpt"):
+            r["dep"] = a["depArpt"].upper()
+        if a.get("arrArpt"):
+            r["arr"] = a["arrArpt"].upper()
+        for rx, typ, actual, planned in ((ETD, "etdType", "off", "etd"), (ETA, "etaType", "on", "eta")):
+            for e in rx.findall(body):
+                e = dict(ATTR.findall(e))
+                t = _ts(e.get("timeValue"))
+                if t:
+                    r[actual if e.get(typ) == "ACTUAL" else planned] = t
+        st = STATUS.search(body)
+        if st:
+            r["status"] = st[1]
+        if r["kind"] == "flightPlanCancellation":
+            r["status"] = "CANCELLED"
+        wps = []
+        for e in WAYPOINT.findall(body):
+            e = dict(ATTR.findall(e))
+            try:
+                wps.append((int(e.get("sequenceNumber") or 0), float(e["latitudeDecimal"]), float(e["longitudeDecimal"]),
+                            int(e.get("elapsedTime") or 0)))
+            except (KeyError, ValueError):
+                pass
+        if len(wps) > 1:
+            r["path"] = [w[1:] for w in sorted(wps)]
+        rep = REPORTED.search(body)
+        if rep:
+            d = [_deg(dict(ATTR.findall(e))) for e in DMS.findall(rep[0])]
+            alt, t = ALTITUDE.search(rep[0]), TIME.search(rep[0])
+            t = t and _ts(t[1])
+            if len(d) == 2 and t:
+                r["ocean"] = (d[0], d[1], int(alt[1]) * 100 if alt else None, t)
+        out.append(r)
+    return out
+
+
+class Flights:
+    """What TFMS says about every flight to, from or over the US, by callsign: its airports, times, filed
+    trajectory and latest oceanic position report. Fed by Feed("tfms", ...)'s messages; flights are dropped
+    an hour after they land or are cancelled, or when nothing's been heard of them for 14 hours."""
+    KEEP, QUIET = 3600, 14 * 3600
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.refs, self.by_cs = {}, {}      # TFMS flight id -> flight; callsign -> {ids}
+        self.pruned = time.time()
+
+    def on_message(self, feed, payload):
+        if feed != "tfms":
+            return
+        for r in parse(payload):
+            self.add(r)
+        if time.time() - self.pruned > 600:
+            self.prune()
+
+    def add(self, r):
+        ref, cs = r.get("ref"), r.get("cs")
+        if not ref or not cs:
+            return
+        with self.lock:
+            f = self.refs.get(ref)
+            if f is None:
+                f = self.refs[ref] = {"cs": cs}
+            elif f["cs"] != cs:                          # a new callsign for the flight
+                self.by_cs.get(f["cs"], set()).discard(ref)
+                f["cs"] = cs
+            self.by_cs.setdefault(cs, set()).add(ref)
+            for k in ("dep", "arr", "status", "off", "etd", "on", "eta", "ocean"):
+                if r.get(k) is not None:
+                    f[k] = r[k]
+            if r.get("path"):                            # flat float32s: lat, lon, s, ... (a day's worth is ~25 MB)
+                f["path"] = array("f", [x for p in r["path"] for x in p])
+            f["t"] = time.time()
+
+    def prune(self):
+        now = time.time()
+        with self.lock:
+            self.pruned = now
+            for ref, f in list(self.refs.items()):
+                done = f.get("on") or f.get("status") in ("COMPLETED", "CANCELLED")
+                if now - f["t"] > (self.KEEP if done else self.QUIET):
+                    del self.refs[ref]
+                    s = self.by_cs.get(f["cs"])
+                    if s:
+                        s.discard(ref)
+                        if not s:
+                            del self.by_cs[f["cs"]]
+
+    def get(self, cs, now=None):
+        """the flight flying under this callsign now (airborne: departed, or reported over the ocean, and not landed), else the one due
+        off within 3 hours either side of now, else None. A copy, path as [(lat, lon, s)]."""
+        now = now or time.time()
+        with self.lock:
+            best, key = None, None
+            for ref in self.by_cs.get((cs or "").strip().upper(), ()):
+                f = self.refs[ref]
+                if f.get("status") == "CANCELLED":
+                    continue
+                up = f.get("off") or (f["ocean"][3] if f.get("ocean") and now - f["ocean"][3] < 6 * 3600 else None)
+                if up and not f.get("on") and f.get("status") != "COMPLETED" and now - up < 20 * 3600:
+                    k = (0, -up)
+                elif f.get("etd") and abs(f["etd"] - now) < 3 * 3600 and not f.get("off"):
+                    k = (1, abs(f["etd"] - now))
+                else:
+                    continue
+                if key is None or k < key:
+                    best, key = f, k
+            if best is None:
+                return None
+            f = dict(best)
+        if "path" in f:
+            p = f["path"]
+            f["path"] = [(p[i], p[i + 1], p[i + 2]) for i in range(0, len(p), 3)]
+        return f
+
+    def stats(self):
+        with self.lock:
+            return {"flights": len(self.refs), "with_path": sum(1 for f in self.refs.values() if "path" in f)}
 
 
 def available():

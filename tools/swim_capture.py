@@ -4,7 +4,8 @@ On the server, with the feed's secrets saved (see swim.py):
     sudo PYTHONPATH=/opt/livescope-pylib python3 tools/swim_capture.py tfms 10     # minutes
 It reads the secrets straight from /etc/agent-secrets/projects/livescope/ (hence sudo), writes every message
 to /tmp/swim-capture/<feed>/NNNNNN.xml.gz (owned by the user who ran sudo), and prints a count by root
-element and message kind. The messages are taken off the queue, as the site would.
+element and message kind. The messages are taken off the queue, so while the site is reading it
+too, each gets about half of them.
 """
 import gzip
 import os
