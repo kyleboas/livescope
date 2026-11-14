@@ -6,6 +6,7 @@ upstream request; OpenSky's worldwide snapshot with ocean estimates; and adsbdb.
 import gzip
 import json
 import os
+import sys
 import threading
 import time
 import urllib.error
@@ -131,15 +132,27 @@ class World:
         self.busy = False
         self.prev, self.lost = {}, {}
         self.token, self.token_exp = None, 0.0
+        self.err, self.auth_retry = None, 0.0     # why the last fetch failed; when to try a rejected client again
 
     def auth(self):
-        if not self.cid:
+        """The OpenSky client's bearer header. If OpenSky turns the client down (a wrong id or secret), fetch
+        anonymously (every 15 min) and say so in the world body's err, trying the client again hourly."""
+        if not self.cid or time.time() < self.auth_retry:
             return {}
         if time.time() > self.token_exp - 60:
             data = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": self.cid, "client_secret": self.secret}).encode()
-            with urllib.request.urlopen(urllib.request.Request(self.TOKEN_URL, data=data), timeout=10) as r:
-                j = json.load(r)
+            try:
+                with urllib.request.urlopen(urllib.request.Request(self.TOKEN_URL, data=data), timeout=10) as r:
+                    j = json.load(r)
+            except urllib.error.HTTPError as e:
+                if e.code not in (400, 401, 403):
+                    raise
+                self.auth_retry, self.every = time.time() + 3600, 900
+                self.err = f"OpenSky turned down the API client (HTTP {e.code}): check opensky-client-id and -secret"
+                print("livescope:", self.err, file=sys.stderr, flush=True)
+                return {}
             self.token, self.token_exp = j["access_token"], time.time() + j.get("expires_in", 1800)
+            self.every = 90
         return {"Authorization": "Bearer " + self.token}
 
     def fetch(self):
@@ -157,18 +170,32 @@ class World:
                 ac.append([st[0], round(st[6], 4), round(st[5], 4), round(st[10] or 0), round((st[9] or 0) * 1.94384),
                            round((alt or 0) * 3.28084 / 100), int(st[3]), (st[1] or "").strip(), 1 if st[8] else 0])
             est = self.estimate(t, ac)
-            body = json.dumps({"ok": True, "t": t, "every": self.every, "src": "OpenSky", "ac": ac, "est": est}, separators=(",", ":")).encode()
+            body = json.dumps({"ok": True, "t": t, "every": self.every, "src": "OpenSky", "ac": ac, "est": est,
+                               **({"err": self.err} if self.err else {})}, separators=(",", ":")).encode()
             gz = gzip.compress(body, 6)
             with self.lock:
                 self.body, self.gz = body, gz
+            if not self.auth_retry or time.time() >= self.auth_retry:
+                self.err = None
         except urllib.error.HTTPError as e:
             retry = e.headers.get("X-Rate-Limit-Retry-After-Seconds") if e.headers else None
             wait = max(self.every, int(retry)) if retry and retry.isdigit() else self.every
-        except Exception:  # noqa: BLE001 - try again next time round
+            self.fail(f"OpenSky answered HTTP {e.code}")
+        except Exception as e:  # noqa: BLE001 - try again next time round
             wait = 120
+            self.fail(f"OpenSky fetch failed: {type(e).__name__}: {e}")
         with self.lock:
             self.next_at = time.time() + wait
             self.busy = False
+
+    def fail(self, msg):
+        """Keep the last good snapshot, but tag the body with why the latest fetch failed (and log it)."""
+        print("livescope:", msg, file=sys.stderr, flush=True)
+        with self.lock:
+            d = json.loads(self.body)
+            d["err"] = msg
+            self.body = json.dumps(d, separators=(",", ":")).encode()
+            self.gz = gzip.compress(self.body, 6)
 
     def estimate(self, t, ac):
         """Aircraft that were cruising and then dropped out of every receiver's range (mostly over the oceans,
