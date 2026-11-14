@@ -1,8 +1,6 @@
-"""Airspace and weather hazards for livescope's map layers (feature "wx", /api/live/wx): TFRs, SIGMETs, AIRMETs, CWAs
-and PIREPs, worldwide where the source covers it.
+"""Weather hazards for livescope's map layers (feature "wx", /api/live/wx): SIGMETs, AIRMETs, CWAs and PIREPs,
+worldwide where the source covers it.
 
-- TFRs: the FAA's tfr.faa.gov. The list of active ones, their shapes (its GeoServer) and each one's details
-  (times, altitudes and NOTAM text, fetched once per TFR).
 - SIGMETs (US, convective included, and international), G-AIRMETs (US, the current forecast), CWAs (US Center
   Weather Advisories) and PIREPs/AIREPs (the last 2 h, worldwide): aviationweather.gov's Data API.
 
@@ -10,27 +8,18 @@ Nothing needs a key. The whole world is fetched (well under 1 MB) when someone a
 FRESH_S, in the background; the request gets the last copy straight away.
 
 /api/live/wx gives {ok, t, areas: [{k, id, name, hz, alt, from, to, text, poly: [[[lat, lon], ...], ...]}],
-pireps: [[lat, lon, fl (hundreds of ft) or -1, kind (0 AIREP, 1 PIREP, 2 urgent), obs time, raw, turbulence, icing]],
-err: {tfr: why there are none}}.
-k is tfr, sigmet, csigmet (convective), isigmet (international), airmet or cwa; from/to are unix seconds or null.
+pireps: [[lat, lon, fl (hundreds of ft) or -1, kind (0 AIREP, 1 PIREP, 2 urgent), obs time, raw, turbulence, icing]]}.
+k is sigmet, csigmet (convective), isigmet (international), airmet or cwa; from/to are unix seconds or null.
 """
 import calendar
 import json
-import re
 import threading
 import time
 import urllib.request
-import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor
 
 UA = {"User-Agent": "livescope/1 (+https://github.com/kyleboas/livescope)"}
 AWC = "https://aviationweather.gov/api/data/"
-TFR_LIST = "https://tfr.faa.gov/tfrapi/exportTfrList"
-TFR_SHAPES = ("https://tfr.faa.gov/geoserver/TFR/ows?service=WFS&version=1.1.0&request=GetFeature&typeName=TFR:V_TFR_LOC"
-              "&maxFeatures=1000&outputFormat=application/json&srsname=EPSG:4326")
-TFR_DETAIL = "https://tfr.faa.gov/download/detail_{}.xml"
-FRESH_S = 300              # weather is refetched at most this often
-TFR_S = 600                # and TFRs
+FRESH_S = 300              # refetched at most this often
 TEXT_MAX = 3000
 AIRMET_NAMES = {"IFR": "IFR", "MT_OBSC": "mountain obscuration", "TURB-HI": "turbulence (high)", "TURB-LO": "turbulence (low)",
                 "ICE": "icing", "SFC_WND": "surface wind", "LLWS": "low-level wind shear", "M_FZLVL": "multiple freezing levels"}
@@ -83,15 +72,13 @@ class Hazards:
         self.lock = threading.Lock()
         self.out = {"ok": False, "t": 0, "areas": [], "pireps": []}
         self.wx = {"sigmet": [], "isigmet": [], "airmet": [], "cwa": [], "pireps": []}
-        self.tfrs, self.tfr_info = [], {}       # tfr areas; notam id -> details
-        self.wxT = self.tfrT = 0.0
+        self.wxT = 0.0
         self.busy = False
-        self.err = {}                           # source -> why it's missing (tfr.faa.gov refuses some hosting networks' IPs)
 
     def get(self, s=None):
         now = time.time()
         with self.lock:
-            go = not self.busy and (now - self.wxT > FRESH_S or now - self.tfrT > TFR_S)
+            go = not self.busy and now - self.wxT > FRESH_S
             if go:
                 self.busy = True
             first = not self.out["ok"]
@@ -110,18 +97,12 @@ class Hazards:
                     self.wxT = now
                 else:
                     self.wxT = now - FRESH_S + 60
-            if now - self.tfrT > TFR_S:
-                if self.load_tfrs():
-                    self.tfrT = now
-                else:
-                    self.tfrT = now - TFR_S + 60
             w = self.wx
-            self.out = {"ok": bool(self.wxT or self.tfrT), "t": round(time.time()),
-                        "areas": self.tfrs + w["sigmet"] + w["isigmet"] + w["airmet"] + w["cwa"], "pireps": w["pireps"], "err": dict(self.err)}
+            self.out = {"ok": bool(self.wxT), "t": round(time.time()),
+                        "areas": w["sigmet"] + w["isigmet"] + w["airmet"] + w["cwa"], "pireps": w["pireps"]}
         finally:
             with self.lock:
                 self.busy = False
-        self.err = {}                           # source -> why it's missing (tfr.faa.gov refuses some hosting networks' IPs)
 
     # ---------------------------------------------------------------- aviationweather.gov
     def awc(self, what):
@@ -194,54 +175,3 @@ class Hazards:
                             iso_t(p.get("obsTime")), (p.get("rawOb") or "")[:600], tb, ic])
             self.wx["pireps"] = out
         return got > 0
-
-    # ---------------------------------------------------------------- tfr.faa.gov
-    def load_tfrs(self):
-        try:
-            active = {x["notam_id"]: x for x in json.loads(fetch(TFR_LIST)) if x.get("notam_id")}
-            shapes = json.loads(fetch(TFR_SHAPES, 40)).get("features") or []
-        except Exception as e:  # noqa: BLE001
-            print(f"livescope: tfr.faa.gov: {e}", flush=True)
-            self.err["tfr"] = f"tfr.faa.gov refused this server (HTTP {e.code})" if hasattr(e, "code") else "tfr.faa.gov didn't answer"
-            return False
-        self.err.pop("tfr", None)
-        by_id = {}
-        for f in shapes:
-            nid = (f.get("id") or "").partition(".")[2]
-            if nid in active:
-                got = by_id.setdefault(nid, [])
-                got += [r for r in rings(f.get("geometry")) if r not in got]     # the same shape can come more than once
-        new = [n for n in by_id if n not in self.tfr_info]
-        with ThreadPoolExecutor(6) as ex:
-            for nid, d in zip(new, ex.map(self.tfr_detail, new)):
-                self.tfr_info[nid] = d
-        for nid in [n for n in self.tfr_info if n not in active]:
-            del self.tfr_info[nid]
-        out = []
-        for nid, polys in by_id.items():
-            a, d = active[nid], self.tfr_info.get(nid) or {}
-            out.append({"k": "tfr", "id": nid, "name": f"TFR {nid} {a.get('description') or ''}".strip(), "hz": (a.get("type") or "").title(),
-                        "alt": d.get("alt", ""), "from": d.get("from"), "to": d.get("to"), "text": d.get("text", ""), "poly": polys})
-        self.tfrs = out
-        return True
-
-    @staticmethod
-    def tfr_detail(nid):
-        """a TFR's times (UTC in the XML), altitudes and NOTAM text, from its XNOTAM file"""
-        try:
-            root = ET.fromstring(fetch(TFR_DETAIL.format(nid.replace("/", "_"))).decode("utf-8-sig"))
-        except Exception:  # noqa: BLE001 - shown without them
-            return {}
-        g = lambda tag: (root.findtext(".//" + tag) or "").strip()      # noqa: E731
-
-        def alt(which):
-            v, uom, code = g("valDistVer" + which), g("uomDistVer" + which), g("codeDistVer" + which)
-            if not v:
-                return ""
-            if uom == "FL":
-                return "FL" + v.zfill(3)
-            return "SFC" if v == "0" and code in ("HEI", "SFC") else v + (" AGL" if code == "HEI" else "")
-        lo, hi = alt("Lower"), alt("Upper")
-        text = re.sub(r"\s+", " ", g("txtDescrTraditional"))
-        return {"from": iso_t(g("dateEffective")), "to": iso_t(g("dateExpire")), "alt": f"{lo or 'SFC'}–{hi}" if hi else "",
-                "text": text[:TEXT_MAX]}
