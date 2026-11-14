@@ -21,6 +21,12 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
 - **Ground maps:** zoomed in to an airport (GND / FLD), its taxiways, aprons, terminals and gates come
   from OpenStreetMap. The server fetches them once through Overpass, in the background, and caches them
   for 30 days in `livedata/ground/`. Taxiing aircraft leave history trails.
+- **Aircraft card:** click an aircraft for everything the feed has on it, as on ADS-B Exchange: type and
+  its name, owner/operator, year built, country of registration, category, barometric and GPS altitude,
+  ground/indicated/true speed and Mach, track and headings, roll, wind and air temperature, autopilot
+  settings (selected altitude and heading, modes, QNH), signal (source, last seen, messages, RSSI) and
+  accuracy (NACp, NIC, SIL ...), with a planespotters.net photo. IAS, Mach, wind and the like only come
+  from aircraft that send them (mostly over Europe).
 - **ALL / ARR / DEP / ARR+DEP** (bottom right) greys out and untags everything except the picked
   airport's arrivals and/or departures.
   - ADS-B has no flight plan, so these are guessed from track, altitude and climb/descent. Traffic goes
@@ -33,7 +39,10 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   - Anonymously, that's one snapshot every 15 min. Set `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`
     (a free OpenSky API client) to get one every 90 s.
   - No free feed covers the oceans, so airliners that leave every receiver's range at cruise are
-    carried on toward their scheduled destination as estimates (hollow rings).
+    carried on as estimates (hollow rings). Over the North Atlantic, one lined up on one of the day's North
+    Atlantic Tracks (from natTrak, refreshed every 30 min) follows that track's waypoints, then heads for its
+    scheduled destination. Hovering it shows e.g. `→ KJFK via NAT C`. Anything else heads straight for its
+    scheduled destination, or carries straight on.
 - **Timelapses:** the clock button (top right) records the area in view on the server: one snapshot
   every 5 s, for 15 min to 24 h, carrying on with nobody watching. Any recording plays back in the scope at
   10× to 600×, eased between snapshots, with a scrubber; you can still pan, zoom, filter and click aircraft.
@@ -80,7 +89,7 @@ push to GitHub deploys.
 ```
 deploy/        install-service.sh: the system service, its secrets and auto-deploy
 site.py        the site's settings and which providers it uses
-adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates, adsbdb routes
+adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates (North Atlantic Tracks), adsbdb routes
 timelapse.py   records areas' traffic on the server and serves it back for playback
 ```
 

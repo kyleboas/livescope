@@ -27,4 +27,5 @@ def providers():
     world = adsb.World(routes)
     tl = timelapse.Timelapse(traffic, adsb.MAX_NM, world)
     return {"traffic": traffic, "world": world, "routes": routes, "atis": Atis(),
-            "max_nm": adsb.MAX_NM, "features": ["timelapse"], "endpoints": {"timelapse": tl.endpoint}}
+            "max_nm": adsb.MAX_NM, "features": ["timelapse", "aircraft"],
+            "endpoints": {"timelapse": tl.endpoint, "aircraft": traffic.detail}}

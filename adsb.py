@@ -1,11 +1,15 @@
 """Real-world traffic for livescope: public ADS-B aggregators (readsb JSON, at most 250 nm around a
 point; adsb.lol, then adsb.fi), cached per area so everyone looking at the same place shares one
-upstream request; OpenSky's worldwide snapshot with ocean estimates; and adsbdb.com callsign routes.
+upstream request; OpenSky's worldwide snapshot with ocean estimates (along the day's North Atlantic Tracks
+where they fit); and adsbdb.com callsign routes.
 (ATIS and METARs come from scope.weather.)
 """
+import calendar
 import gzip
 import json
+import math
 import os
+import re
 import sys
 import threading
 import time
@@ -13,7 +17,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from scope.core import gc_brg, gc_dest, gc_nm
+from scope.aircraft import Lookup
+from scope.core import R_NM, gc_brg, gc_dest, gc_nm
 
 SOURCES = (("adsb.lol", "https://api.adsb.lol/v2/point/{lat}/{lon}/{nm}"),
            ("adsb.fi", "https://opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{nm}"))
@@ -21,6 +26,11 @@ MAX_NM = 250
 FRESH_S = 2.0          # an area's traffic is refetched at most this often
 GAP_S = 0.4            # and upstream requests are spaced at least this far apart overall
 EMERG = ("7500", "7600", "7700")
+HEX_URLS = (("adsb.lol", "https://api.adsb.lol/v2/hex/{}"), ("adsb.fi", "https://opendata.adsb.fi/api/v2/hex/{}"))
+HEX_RE = re.compile(r"~?[0-9a-f]{6}")
+PHOTO_URL = "https://api.planespotters.net/pub/photos/{}/{}"
+PHOTO_UA = "livescope/1 (+https://livescope.kyleboas.com)"
+DB_KEYS = ("desc", "ownOp", "year")      # from the feed's aircraft database: adsb.fi sends them, adsb.lol doesn't
 
 
 def credential(name):
@@ -71,6 +81,11 @@ class Traffic:
         self.lock = threading.Lock()
         self.cache = {}            # key -> (monotonic time, state)
         self.last = -1e9
+        self.raw = {}              # hex -> (feed time, feed name, the feed's whole record): for one aircraft's card
+        self.db = {}               # hex -> (time, {desc, ownOp, year}) looked up on adsb.fi
+        self.db_lock, self.db_last = threading.Lock(), -1e9
+        self.lookup = Lookup()
+        self.photos = {}           # hex -> (time, {src, link, by} or None, or "asking")
 
     def fetch(self, lat, lon, nm):
         for name, url in SOURCES:
@@ -100,6 +115,7 @@ class Traffic:
             if acs is None:
                 st = {**(hit[1] if hit else {"aircraft": [], "t": time.time(), "src": None}), "ok": False}
             else:
+                self.keep_raw(src, acs, now)
                 seen = {}
                 for o in (convert(a, now, key[0], key[1]) for a in acs):
                     if o and (o["id"] not in seen or o["ts"] > seen[o["id"]]["ts"]):
@@ -110,6 +126,110 @@ class Traffic:
                 for k in sorted(self.cache, key=lambda k: self.cache[k][0])[:16]:
                     del self.cache[k]
             return st
+
+    def keep_raw(self, src, acs, now):
+        for a in acs:
+            hx = (a.get("hex") or "").lower()
+            t = now - (a.get("seen") or 0)
+            old = self.raw.get(hx)
+            if hx and (not old or t >= old[0]):
+                self.raw[hx] = (t, src, a)
+            if all(a.get(k) for k in DB_KEYS[1:]):
+                self.db[hx] = (time.time(), {k: a[k] for k in DB_KEYS if a.get(k)})
+        if len(self.raw) > 30000:
+            cut = time.time() - 300
+            self.raw = {k: v for k, v in self.raw.items() if v[0] > cut}
+        if len(self.db) > 30000:
+            self.db.clear()
+
+    def get_json(self, url, timeout=5):
+        req = urllib.request.Request(url, headers={"User-Agent": "livescope/1"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+
+    def by_hex(self, hx, sources=HEX_URLS):
+        """(feed time, feed name, record) for one aircraft straight from a feed, or None"""
+        for name, url in sources:
+            try:
+                d = self.get_json(url.format(urllib.parse.quote(hx)))
+            except Exception:  # noqa: BLE001 - try the next feed
+                continue
+            now = d.get("now") or time.time()
+            now = now / 1000 if now > 1e11 else now
+            for a in d.get("ac") or d.get("aircraft") or []:
+                if (a.get("hex") or "").lower() == hx:
+                    return now - (a.get("seen") or 0), name, a
+            return None
+        return None
+
+    def owner(self, hx, rec):
+        """desc, ownOp and year from the feed's aircraft database (adsb.fi's, a second at most between lookups),
+        looked up in the background so the card doesn't wait for it: it fills in on the page's next ask"""
+        if all(rec.get(k) for k in DB_KEYS[1:]):
+            return {k: rec[k] for k in DB_KEYS if rec.get(k)}
+        hit = self.db.get(hx)
+        if hit and (hit[1] is None or time.time() - hit[0] < (86400 if hit[1] else 600)):
+            return hit[1] or {}
+        self.db[hx] = (time.time(), None)                # asking
+
+        def ask():
+            with self.db_lock:
+                time.sleep(max(0.0, self.db_last + 1.1 - time.monotonic()))
+                self.db_last = time.monotonic()
+                got = self.by_hex(hx, HEX_URLS[1:])
+            self.db[hx] = (time.time(), {k: got[2][k] for k in DB_KEYS if got and got[2].get(k)})
+        threading.Thread(target=ask, daemon=True).start()
+        return {}
+
+    def photo(self, hx, reg):
+        """an aircraft's photo from planespotters.net (by address, else registration), looked up once a day (waited for up to 1.5 s, then left to finish in the background)"""
+        hit = self.photos.get(hx)
+        if hit and (hit[1] == "asking" or time.time() - hit[0] < (86400 if hit[1] else 3600)):
+            return hit[1] if hit[1] != "asking" else None
+        if len(self.photos) > 20000:
+            self.photos.clear()
+        self.photos[hx] = (time.time(), "asking")
+
+        def ask():
+            out = None
+            for kind, key in (("hex", hx), ("reg", reg)):
+                if not key:
+                    continue
+                try:
+                    req = urllib.request.Request(PHOTO_URL.format(kind, urllib.parse.quote(key)), headers={"User-Agent": PHOTO_UA})
+                    with urllib.request.urlopen(req, timeout=6) as r:
+                        p = (json.load(r).get("photos") or [None])[0]
+                except Exception:  # noqa: BLE001 - no photo this time
+                    p = None
+                t = p and (p.get("thumbnail_large") or p.get("thumbnail"))
+                if t and t.get("src"):
+                    out = {"src": t["src"], "link": p.get("link") or "", "by": p.get("photographer") or ""}
+                    break
+            self.photos[hx] = (time.time(), out)
+        th = threading.Thread(target=ask, daemon=True)
+        th.start()
+        th.join(1.5)                   # usually ~0.1 s: answer with the photo rather than make the page ask again
+        hit = self.photos.get(hx)
+        return hit[1] if hit and hit[1] != "asking" else None
+
+    def detail(self, s):
+        """/api/live/aircraft?hex=: everything the feed says about one aircraft, for its card"""
+        hx = s("hex", 7).lower()
+        if not HEX_RE.fullmatch(hx):
+            return {"ok": False, "error": "bad hex"}
+        hit = self.raw.get(hx)
+        if not hit or time.time() - hit[0] > 20:         # not in anyone's area lately: ask a feed for it
+            got = self.by_hex(hx)
+            if got:
+                self.raw[hx] = hit = got
+        if not hit:
+            return {"ok": False, "hex": hx}
+        t, src, a = hit
+        ac = {k: v for k, v in a.items() if k not in ("dst", "dir", "lat", "lon", "desc", "ownOp", "year")}
+        c = self.lookup.country(hx.lstrip("~")) if not hx.startswith("~") else None
+        return {"ok": True, "hex": hx, "t": round(t, 1), "src": src, "ac": ac, "db": self.owner(hx, a),
+                "country": c, "typeinfo": self.lookup.type(a.get("t")),
+                "photo": self.photo(hx, (a.get("r") or "").strip()) if not hx.startswith("~") else None}
 
 
 
@@ -123,6 +243,7 @@ class World:
 
     def __init__(self, routes):
         self.routes = routes
+        self.nat = NatTracks()
         self.lock = threading.Lock()
         self.cid, self.secret = credential("opensky-client-id") or None, credential("opensky-client-secret")
         self.every = 90 if self.cid else 900
@@ -199,10 +320,11 @@ class World:
 
     def estimate(self, t, ac):
         """Aircraft that were cruising and then dropped out of every receiver's range (mostly over the oceans,
-        where there's no free ADS-B): carried on toward their scheduled destination (adsbdb route, when it fits
-        their track) or straight on, at their last ground speed. A guess, drawn as such; dropped when the
-        aircraft is seen again, reaches its destination, comes over an area with coverage, or after 4 hours
-        without a route (13 with one)."""
+        where there's no free ADS-B), carried on at their last ground speed: along the North Atlantic Track
+        they were lined up on (then to their scheduled destination, or straight on), else toward their
+        scheduled destination (adsbdb route, when it fits their track), else straight on. A guess, drawn as
+        such; dropped when the aircraft is seen again, reaches its destination, comes over an area with
+        coverage, or after 4 hours without a route or track (an hour past a track's end; 13 with a route)."""
         seen = {r[0] for r in ac}
         cells = {}
         for r in ac:
@@ -214,6 +336,7 @@ class World:
                 self.lost[hx] = {"cs": r[7], "lat": r[1], "lon": r[2], "trk": r[3], "gs": r[4], "alt": r[5], "ts": r[6]}
         self.prev = {r[0]: r for r in ac}
         routes = self.routes.get([v["cs"] for v in self.lost.values() if v["cs"]], background=True)
+        tracks = self.nat.get()
         out = []
         for hx in list(self.lost):
             v = self.lost[hx]
@@ -221,17 +344,43 @@ class World:
             if hx in seen or dt > 13 * 3600:
                 del self.lost[hx]
                 continue
+            if "nat" not in v and tracks is not None:      # matched once, as it was when lost (the tracks change)
+                v["nat"] = NatTracks.match(tracks, v["lat"], v["lon"], v["trk"], v["alt"], v["ts"])
             dist = v["gs"] * dt / 3600
-            rt, to = routes.get((v["cs"] or "").upper()), ""
-            if rt and rt[4] is not None and rt[5] is not None:
-                left = gc_nm(v["lat"], v["lon"], rt[4], rt[5])
-                if left > 150 and abs((gc_brg(v["lat"], v["lon"], rt[4], rt[5]) - v["trk"] + 540) % 360 - 180) < 50:
+            rt, to, nat = routes.get((v["cs"] or "").upper()), "", v.get("nat")
+            dst = (rt[3], rt[4], rt[5]) if rt and rt[4] is not None and rt[5] is not None else None
+            if nat:
+                path = [(v["lat"], v["lon"])] + nat[1]
+                end = path[-1]
+                if dst and gc_nm(*end, dst[1], dst[2]) > 30 and \
+                        abs((gc_brg(*end, dst[1], dst[2]) - gc_brg(*path[-2], *end) + 540) % 360 - 180) < 90:
+                    path.append((dst[1], dst[2]))
+                    to = f"{dst[0]} via NAT {nat[0]}"
+                else:
+                    to = f"NAT {nat[0]}"
+                pos = along_path(path, dist)
+                if pos is None:                            # past the end
+                    total = sum(gc_nm(*a, *b) for a, b in zip(path, path[1:]))
+                    if len(path) > len(nat[1]) + 1 or dist > total + v["gs"]:   # at its destination, or an hour on
+                        del self.lost[hx]
+                        continue
+                    brg = gc_brg(*path[-2], *end)
+                    la, lo = gc_dest(*end, brg, dist - total)
+                    trk = gc_brg(la, lo, *gc_dest(*end, brg, dist - total + 10))
+                elif len(path) > len(nat[1]) + 1 and pos[3] < 40:   # nearly there: it'll be seen on approach
+                    del self.lost[hx]
+                    continue
+                else:
+                    la, lo, trk = pos[:3]
+            elif dst:
+                left = gc_nm(v["lat"], v["lon"], dst[1], dst[2])
+                if left > 150 and abs((gc_brg(v["lat"], v["lon"], dst[1], dst[2]) - v["trk"] + 540) % 360 - 180) < 50:
                     if dist >= left - 40:                # it has got there (or nearly: it'll be seen on approach)
                         del self.lost[hx]
                         continue
-                    to = rt[3]
-                    la, lo = gc_dest(v["lat"], v["lon"], gc_brg(v["lat"], v["lon"], rt[4], rt[5]), dist)
-                    trk = gc_brg(la, lo, rt[4], rt[5])
+                    to = dst[0]
+                    la, lo = gc_dest(v["lat"], v["lon"], gc_brg(v["lat"], v["lon"], dst[1], dst[2]), dist)
+                    trk = gc_brg(la, lo, dst[1], dst[2])
             if not to:
                 if dt > 4 * 3600:
                     del self.lost[hx]
@@ -242,7 +391,7 @@ class World:
             if dt > 1200 and cells.get((int(la // 2), int(lo // 2)), 0) >= 3:   # receivers there would see it
                 del self.lost[hx]
                 continue
-            out.append([hx, round(la, 3), round(lo, 3), round(trk), v["gs"], v["alt"], int(t), v["cs"], to, int(v["ts"])])
+            out.append([hx, round(la, 3), round(lo, 3), round(trk % 360), v["gs"], v["alt"], int(t), v["cs"], to, int(v["ts"])])
         return out
 
     def get(self):
@@ -251,6 +400,117 @@ class World:
                 self.busy = True
                 threading.Thread(target=self.fetch, daemon=True).start()
             return self.body, self.gz
+
+
+def along_path(path, nm):
+    """(lat, lon, track, nm left) nm along a path of (lat, lon) points (great circles between them), or None past its end"""
+    for i, (a, b) in enumerate(zip(path, path[1:])):
+        seg = gc_nm(*a, *b)
+        if nm <= seg:
+            la, lo = gc_dest(*a, gc_brg(*a, *b), nm)
+            return la, lo, gc_brg(la, lo, *b), seg - nm + sum(gc_nm(*p, *q) for p, q in zip(path[i + 1:], path[i + 2:]))
+        nm -= seg
+    return None
+
+
+def xt_at(lat, lon, brg, plat, plon):
+    """(cross-track, along-track) nm of a point from the great circle through (lat, lon) on bearing brg"""
+    d = gc_nm(lat, lon, plat, plon) / R_NM
+    a = math.radians(gc_brg(lat, lon, plat, plon) - brg)
+    xt = math.asin(max(-1.0, min(1.0, math.sin(d) * math.sin(a))))
+    at = math.acos(max(-1.0, min(1.0, math.cos(d) / max(1e-9, math.cos(xt)))))
+    return xt * R_NM, (at if math.cos(a) >= 0 else -at) * R_NM
+
+
+class NatTracks:
+    """The North Atlantic Tracks (the day's organised routes across the North Atlantic, which most crossings fly:
+    westbound in the day, eastbound at night), as published by NAV CANADA / NATS and relayed by VATSIM's natTrak.
+    Only their lat/lon waypoints are kept (the oceanic part; the named fixes at the ends are on land's doorstep,
+    where ADS-B sees the aircraft anyway). Fetched in the background every 30 minutes; a failed fetch keeps the
+    last tracks."""
+    URL = "https://nattrak.vatsim.net/api/tracks"
+    EVERY, SLACK = 1800, 3600        # refetch; a track is still matched this long after it stops being valid
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.tracks, self.next_at, self.busy = None, 0.0, False
+
+    @staticmethod
+    def parse(d):
+        out = []
+        for tr in d if isinstance(d, list) else []:
+            if not isinstance(tr, dict) or not tr.get("active"):
+                continue
+            pts = []
+            for w in str(tr.get("last_routeing") or "").split():
+                m = re.fullmatch(r"(\d{2})(\d{2})?/(\d{2,3})", w)    # 58/20 = 58N 20W, 5530/20 = 55°30'N 20W
+                if m:
+                    pts.append((int(m[1]) + int(m[2] or 0) / 60, -float(m[3])))
+            if len(pts) < 2:
+                continue
+            fls = [f // 100 for f in tr.get("flight_levels") or [] if isinstance(f, int)]
+            def ts(k):
+                try:
+                    return calendar.timegm(time.strptime(tr[k][:19], "%Y-%m-%dT%H:%M:%S"))
+                except Exception:  # noqa: BLE001 - no usable time: don't limit by it
+                    return None
+            way = {"west": -1, "east": 1}.get(str(tr.get("direction") or "").lower())   # waypoints in flying order
+            if way and (pts[-1][1] - pts[0][1]) * way < 0:
+                pts.reverse()
+            out.append({"id": str(tr.get("identifier") or "?"), "pts": pts, "way": way, "fl": (min(fls), max(fls)) if fls else (290, 410),
+                        "from": ts("valid_from"), "to": ts("valid_to")})
+        return out
+
+    def fetch(self):
+        try:
+            req = urllib.request.Request(self.URL, headers={"User-Agent": "livescope/1"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                tracks = self.parse(json.load(r))
+            with self.lock:
+                self.tracks, self.next_at = tracks, time.time() + self.EVERY
+        except Exception as e:  # noqa: BLE001 - keep the last tracks, try again in 5 minutes
+            print(f"livescope: NAT tracks fetch failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            with self.lock:
+                self.next_at = time.time() + 300
+        with self.lock:
+            self.busy = False
+
+    def get(self):
+        """the tracks (None until the first fetch); starts a refetch in the background when due"""
+        with self.lock:
+            if not self.busy and time.time() >= self.next_at:
+                self.busy = True
+                threading.Thread(target=self.fetch, daemon=True).start()
+            return self.tracks
+
+    @staticmethod
+    def match(tracks, lat, lon, trk, alt, ts):
+        """(track id, its waypoints still ahead) for an aircraft lined up on a track when it was last seen (on
+        it, or heading for its first waypoint within 500 nm, the way the track is flown, at one of its levels
+        give or take 2000 ft), the closest such; else None."""
+        best = None
+        for tr in tracks:
+            if tr["from"] and ts < tr["from"] - 1800 or tr["to"] and ts > tr["to"] + NatTracks.SLACK:
+                continue
+            if not tr["fl"][0] - 20 <= alt <= tr["fl"][1] + 20:
+                continue
+            for pts in (tr["pts"],) if tr.get("way") else (tr["pts"], tr["pts"][::-1]):   # no direction given: the heading picks
+                i = next((i for i, p in enumerate(pts) if xt_at(lat, lon, trk, *p)[1] > 30), None)
+                if i is None:
+                    continue
+                a, b = (pts[i - 1], pts[i]) if i else (pts[0], pts[1])
+                seg = gc_brg(*a, *b)
+                if abs((seg - trk + 540) % 360 - 180) > 30:
+                    continue
+                if i:                                    # on the track: off it by
+                    off = abs(xt_at(*a, seg, lat, lon)[0])
+                else:                                    # short of its start: heading for it within
+                    if gc_nm(lat, lon, *pts[0]) > 500:
+                        continue
+                    off = abs(xt_at(lat, lon, trk, *pts[0])[0])
+                if off < 40 and (best is None or off < best[0]):
+                    best = (off, tr["id"], list(pts[i:]))
+        return best and (best[1], best[2])
 
 
 class Routes:
