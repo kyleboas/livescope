@@ -34,6 +34,10 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   - Zoomed out to the globe, it records the whole world instead: OpenSky's worldwide snapshot, one every
     90 s with an OpenSky API client (else every 15 min), played back at 60× to 3600×. About 100–400 KB
     a snapshot, so ~4–16 MB an hour with a client. One world recording at a time.
+  - **The past:** the server also records the whole world all the time and keeps the last 24 h (about
+    100–400 MB on disk with a client), so the top of the panel plays the last 1–24 h at any moment, of the
+    globe or of the area in view (at OpenSky's detail, not the live feed's). `?tl=recent&h=6` links to it.
+    This keeps OpenSky polled around the clock, which uses most of the daily allowance either way.
   - At most 4 record at once. Recordings are kept 30 days (or until they pass 4 GB in total) in
     `livedata/timelapse/`, or `$LIVESCOPE_TIMELAPSE_DIR`. A busy airport at 60 nm takes about 2 MB an hour.
   - `?tl=<id>` in the URL opens a recording, so it can be shared.

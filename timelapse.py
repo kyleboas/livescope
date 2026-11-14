@@ -9,6 +9,10 @@ A recording is either of an area (kind "area": the live ADS-B feed, up to 250 nm
 the whole world (kind "world": OpenSky's worldwide snapshot, every 90 s with an OpenSky API client, else
 every 15 min), one world recording at a time.
 
+The server also records the world all the time into a rolling recording (id "recent", ROLL_H hours, the
+oldest hour dropped as a new one comes in), so the past few hours can be played back at any moment, of the
+whole globe or zoomed in on any area (at OpenSky's coarser detail): a=frames&id=recent&from=<now - 6 h>.
+
 On disk, in livedata/timelapse/ (or $LIVESCOPE_TIMELAPSE_DIR): <id>.json (the recording's settings and
 time span) and <id>/<hour>.ndjson.gz, one line per snapshot, each appended as its own gzip member:
     area:  [t, [[id, cs, lat, lon, alt, gs, hdg, vs, ground, type, reg, sq, emer], ...]]
@@ -41,6 +45,7 @@ KEEP_DAYS = 30
 MAX_MB = 4000
 MAX_FRAMES = 2000       # snapshots per frames request (an area's)
 MAX_WORLD_FRAMES = 12   # world snapshots per frames request (each is ~10,000 aircraft)
+ROLL_ID, ROLL_H = "recent", 24   # the always-on world recording, and how many hours back it keeps
 
 
 def read_members(path):
@@ -87,6 +92,11 @@ class Timelapse:
                     self.recs[r["id"]] = r
                 except (OSError, ValueError, KeyError):
                     continue
+        if world and ROLL_ID not in self.recs:
+            now = time.time()
+            self.recs[ROLL_ID] = {"id": ROLL_ID, "name": "The past", "lat": 0, "lon": 0, "nm": max_nm, "kind": "world",
+                                  "rolling": True, "start": now, "until": 1e11, "first": None, "last": 0, "n": 0, "peak": 0}
+            self.save(self.recs[ROLL_ID])
         self.prune()
         threading.Thread(target=self.worker, daemon=True).start()
 
@@ -102,8 +112,15 @@ class Timelapse:
         return [r for r in self.recs.values() if r["until"] > now]
 
     def worker(self):
+        pruned = time.time()
         while True:
             t0 = time.time()
+            if t0 - pruned > 600:
+                pruned = t0
+                try:
+                    self.prune()
+                except Exception:  # noqa: BLE001
+                    pass
             with self.lock:
                 todo = [dict(r) for r in self.active(t0)]
             for r in todo:
@@ -150,6 +167,7 @@ class Timelapse:
 
     def prune(self):
         now = time.time()
+        self.roll(now)
         with self.lock:
             old = sorted(self.recs.values(), key=lambda r: r["start"])
             drop = [r for r in old if r["until"] < now - KEEP_DAYS * 86400]
@@ -168,6 +186,31 @@ class Timelapse:
                 except OSError:
                     pass
 
+    def roll(self, now):
+        """Drop the always-on recording's hours older than ROLL_H."""
+        r = self.recs.get(ROLL_ID)
+        d = os.path.join(self.dir, ROLL_ID)
+        if not r or not os.path.isdir(d):
+            return
+        cut = int((now - ROLL_H * 3600) // 3600)
+        kept = []
+        for f in os.listdir(d):
+            if f.endswith(".ndjson.gz"):
+                if int(f.split(".")[0]) < cut:
+                    os.remove(os.path.join(d, f))
+                else:
+                    kept.append(int(f.split(".")[0]))
+        if kept and r.get("first") and r["first"] < min(kept) * 3600:
+            with self.lock:
+                first = self.first_in(d, min(kept))
+                if first:
+                    r["first"] = first
+                    self.save(r)
+
+    def first_in(self, d, hr):
+        line = read_members(os.path.join(d, f"{hr}.ndjson.gz")).split(b"\n", 1)[0]
+        return float(line[1:line.index(b",")]) if line else None
+
     def size(self, r):
         d = os.path.join(self.dir, r["id"])
         return sum(os.path.getsize(os.path.join(d, f)) for f in os.listdir(d)) if os.path.isdir(d) else 0
@@ -185,14 +228,15 @@ class Timelapse:
         world = r.get("kind") == "world"
         return {k: r.get(k) for k in ("id", "name", "lat", "lon", "nm", "start", "until", "first", "last", "n", "peak")} | \
                {"kind": "world" if world else "area", "rec": r["until"] > now,
-                "every_s": self.world.every if world else INTERVAL_S}
+                "every_s": self.world.every if world else INTERVAL_S, "rolling": bool(r.get("rolling")),
+                **({"keep_h": ROLL_H} if r.get("rolling") else {})}
 
     def endpoint(self, s):
         a, now = s("a", 10), time.time()
         if a == "list":
             with self.lock:
                 return {"recs": [self.public(r, now) for r in sorted(self.recs.values(), key=lambda r: -r["start"])],
-                        "max_active": MAX_ACTIVE, "max_h": MAX_H, "need_key": bool(self.key),
+                        "max_active": MAX_ACTIVE, "roll_h": ROLL_H if ROLL_ID in self.recs else 0, "max_h": MAX_H, "need_key": bool(self.key),
                         "world_every": self.world.every if self.world else None}
         if a in ("check", "start", "stop") and not self.key_ok(s("key", 200)):
             return {"error": "wrong key", "bad_key": True}
@@ -209,9 +253,10 @@ class Timelapse:
             name = re.sub(r"[^\w .,/()+-]", "", s("name", 40)).strip() or ("World" if world else f"{lat:.2f}, {lon:.2f}")
             self.prune()
             with self.lock:
-                if len(self.active(now)) >= MAX_ACTIVE:
+                mine = [x for x in self.active(now) if not x.get("rolling")]
+                if len(mine) >= MAX_ACTIVE:
                     return {"error": f"{MAX_ACTIVE} timelapses are already recording; try again when one finishes"}
-                if world and any(x.get("kind") == "world" for x in self.active(now)):
+                if world and any(x.get("kind") == "world" for x in mine):
                     return {"error": "the world is already being recorded"}
                 r = {"id": uuid.uuid4().hex[:10], "name": name, "lat": round(lat, 3), "lon": round(lon, 3), "nm": round(nm),
                      "kind": "world" if world else "area",
@@ -223,6 +268,8 @@ class Timelapse:
         if not r:
             return {"error": "no such timelapse"}
         if a == "stop":
+            if r.get("rolling"):
+                return {"error": "that one is always recording"}
             with self.lock:
                 if r["until"] > now:
                     r["until"] = now
