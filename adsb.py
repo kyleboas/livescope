@@ -163,29 +163,26 @@ class Traffic:
         return None
 
     def owner(self, hx, rec):
-        """desc, ownOp and year from the feed's aircraft database (adsb.fi's, a second at most between lookups)"""
+        """desc, ownOp and year from the feed's aircraft database (adsb.fi's, a second at most between lookups),
+        looked up in the background so the card doesn't wait for it: it fills in on the page's next ask"""
         if all(rec.get(k) for k in DB_KEYS[1:]):
             return {k: rec[k] for k in DB_KEYS if rec.get(k)}
         hit = self.db.get(hx)
-        if hit and time.time() - hit[0] < (86400 if hit[1] else 600):
-            return hit[1]
-        if not self.db_lock.acquire(timeout=3):
-            return {}
-        try:
-            hit = self.db.get(hx)
-            if hit and time.time() - hit[0] < 600:
-                return hit[1]
-            time.sleep(max(0.0, self.db_last + 1.1 - time.monotonic()))
-            self.db_last = time.monotonic()
-            got = self.by_hex(hx, HEX_URLS[1:])
-            db = {k: got[2][k] for k in DB_KEYS if got and got[2].get(k)}
-            self.db[hx] = (time.time(), db)
-            return db
-        finally:
-            self.db_lock.release()
+        if hit and (hit[1] is None or time.time() - hit[0] < (86400 if hit[1] else 600)):
+            return hit[1] or {}
+        self.db[hx] = (time.time(), None)                # asking
+
+        def ask():
+            with self.db_lock:
+                time.sleep(max(0.0, self.db_last + 1.1 - time.monotonic()))
+                self.db_last = time.monotonic()
+                got = self.by_hex(hx, HEX_URLS[1:])
+            self.db[hx] = (time.time(), {k: got[2][k] for k in DB_KEYS if got and got[2].get(k)})
+        threading.Thread(target=ask, daemon=True).start()
+        return {}
 
     def photo(self, hx, reg):
-        """an aircraft's photo from planespotters.net (by address, else registration), looked up once a day in the background"""
+        """an aircraft's photo from planespotters.net (by address, else registration), looked up once a day (waited for up to 1.5 s, then left to finish in the background)"""
         hit = self.photos.get(hx)
         if hit and (hit[1] == "asking" or time.time() - hit[0] < (86400 if hit[1] else 3600)):
             return hit[1] if hit[1] != "asking" else None
@@ -209,8 +206,11 @@ class Traffic:
                     out = {"src": t["src"], "link": p.get("link") or "", "by": p.get("photographer") or ""}
                     break
             self.photos[hx] = (time.time(), out)
-        threading.Thread(target=ask, daemon=True).start()
-        return None
+        th = threading.Thread(target=ask, daemon=True)
+        th.start()
+        th.join(1.5)                   # usually ~0.1 s: answer with the photo rather than make the page ask again
+        hit = self.photos.get(hx)
+        return hit[1] if hit and hit[1] != "asking" else None
 
     def detail(self, s):
         """/api/live/aircraft?hex=: everything the feed says about one aircraft, for its card"""
