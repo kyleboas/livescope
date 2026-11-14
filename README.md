@@ -11,8 +11,8 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
 - **Procedures:** US airports show their SIDs, STARs and approaches (FAA CIFP). Pick one in the airport
   card to highlight it with its fixes.
 - **Airport card:** frequencies, the current ATIS (FAA D-ATIS through atis.info, US only) and the latest
-  METAR (aviationweather.gov), plus LiveATC.net: its link opens LiveATC's page for the airport in a small window
-  beside the scope, which follows the airport you pick and closes from the header (LiveATC ✕). You pick a feed
+  METAR (aviationweather.gov), plus LiveATC.net: its link opens LiveATC's page for the airport in a new tab,
+  which follows the airport you pick and closes from the header (LiveATC ✕). You pick a feed
   there and it plays in LiveATC's own player; their terms rule out playing their streams on this page.
 - **Live audio:** airports listed in `SITE["audio"]` (`site.py`) get ▶ buttons in their card that play the
   stream on the page; it keeps playing as you move around, and the header's ■ button stops it. Any stream
