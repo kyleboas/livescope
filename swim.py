@@ -10,7 +10,9 @@ SWIM_TFMS_USERNAME etc.):
 The username and queue name hold the account's e-mail address, so they're kept out of the repository too.
 """
 import calendar
+import gzip
 import os
+import pickle
 import re
 import sys
 import threading
@@ -232,13 +234,50 @@ def parse(payload):
 class Flights:
     """What TFMS says about every flight to, from or over the US, by callsign: its airports, times, filed
     trajectory and latest oceanic position report. Fed by Feed("tfms", ...)'s messages; flights are dropped
-    an hour after they land or are cancelled, or when nothing's been heard of them for 14 hours."""
-    KEEP, QUIET = 3600, 14 * 3600
+    an hour after they land or are cancelled, or when nothing's been heard of them for 14 hours.
+    A flight's route only comes with some of its messages (every half hour or so), so the lot is saved every
+    5 minutes (to the service's state directory, $STATE_DIRECTORY/swim-flights.pickle.gz, or the path given)
+    and read back on start when it's under 2 hours old: a restart doesn't lose them."""
+    KEEP, QUIET, SAVE_EVERY = 3600, 14 * 3600, 300
 
-    def __init__(self):
+    def __init__(self, path=None):
         self.lock = threading.Lock()
         self.refs, self.by_cs = {}, {}      # TFMS flight id -> flight; callsign -> {ids}
-        self.pruned = time.time()
+        self.pruned = self.saved = time.time()
+        state = (os.environ.get("STATE_DIRECTORY") or "").split(":")[0]
+        self.path = path or (os.path.join(state, "swim-flights.pickle.gz") if state else None)
+        self.load()
+
+    def load(self):
+        try:
+            if not self.path or not os.path.exists(self.path) or time.time() - os.path.getmtime(self.path) > 2 * 3600:
+                return
+            with gzip.open(self.path, "rb") as f:
+                refs = pickle.load(f)                    # our own file, in a directory only the service can write
+        except (OSError, EOFError, pickle.UnpicklingError, ValueError, AttributeError) as e:
+            print(f"livescope: SWIM: couldn't read {self.path}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            return
+        with self.lock:
+            self.refs = refs
+            for ref, f in refs.items():
+                self.by_cs.setdefault(f["cs"], set()).add(ref)
+        self.prune()
+        print(f"livescope: SWIM: {len(self.refs)} flights read back from {self.path}", file=sys.stderr, flush=True)
+
+    def save(self):
+        """called from the feed's thread, the only one that changes flights, so they hold still meanwhile"""
+        self.saved = time.time()
+        if not self.path:
+            return
+        try:
+            with self.lock:
+                refs = dict(self.refs)
+            tmp = self.path + ".tmp"
+            with gzip.open(tmp, "wb", compresslevel=1) as f:
+                pickle.dump(refs, f, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp, self.path)
+        except OSError as e:
+            print(f"livescope: SWIM: couldn't save {self.path}: {e}", file=sys.stderr, flush=True)
 
     def on_message(self, feed, payload):
         if feed != "tfms":
@@ -247,6 +286,8 @@ class Flights:
             self.add(r)
         if time.time() - self.pruned > 600:
             self.prune()
+        if time.time() - self.saved > self.SAVE_EVERY:
+            self.save()
 
     def add(self, r):
         ref, cs = r.get("ref"), r.get("cs")
