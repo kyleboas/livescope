@@ -27,6 +27,10 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   settings (selected altitude and heading, modes, QNH), signal (source, last seen, messages, RSSI) and
   accuracy (NACp, NIC, SIL ...), with a planespotters.net photo. IAS, Mach, wind and the like only come
   from aircraft that send them (mostly over Europe).
+  - For flights to, from or over the US (with FAA SWIM set up), the card also shows the filed flight plan:
+    airports and route text, e.g. `KORD..NOONY..OBH..CHESZ.Q88.HAKMN.ANJLL4.KLAX`. The map draws it as a
+    dashed line with the fixes labelled (the "Selected flight's route" layer). A flight's route comes with
+    its next route update from TFMS, so a flight first seen moments ago may show only its airports for a bit.
 - **ACARS:** the aircraft card also lists the datalink messages the aircraft sent and received over the last
   12 h (VHF ACARS, VDL2, HFDL and SATCOM), as heard by [airframes.io](https://app.airframes.io)'s volunteer
   feeders, newest first. Most are airline and FMS reports, but some are ATC: CPDLC (shown encoded, as sent),
