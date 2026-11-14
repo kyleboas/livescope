@@ -564,7 +564,7 @@ class Routes:
     def __init__(self, flights=None, airports=None):
         self.flights, self.airports = flights, airports   # swim.Flights, scope.core.Airports (both optional)
         self.lock = threading.Lock()
-        self.cache = {}            # callsign -> (time, [orig, olat, olon, dest, dlat, dlon] or None)
+        self.cache = {}            # callsign -> (time, [orig, olat, olon, dest, dlat, dlon] or None); TFMS's add "filed"
         self.queue = []
         self.wake = threading.Event()
         threading.Thread(target=self.worker, daemon=True).start()
@@ -615,7 +615,7 @@ class Routes:
         if not f or not f.get("dep") or not f.get("arr"):
             return None
         p = f.get("path")
-        return self.airport(f["dep"], p and p[0]) + self.airport(f["arr"], p and p[-1])
+        return self.airport(f["dep"], p and p[0]) + self.airport(f["arr"], p and p[-1]) + ["filed"]
 
     def get(self, callsigns, background=False):
         """known routes now; unknown ones are queued (a page's asks ahead of background ones) and show up on a later call"""

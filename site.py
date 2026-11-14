@@ -42,5 +42,6 @@ def providers(airports=None):
     world = adsb.World(routes, fl)
     tl = timelapse.Timelapse(traffic, adsb.MAX_NM, world)
     return {"traffic": traffic, "world": world, "routes": routes, "atis": Atis(),
-            "max_nm": adsb.MAX_NM, "features": ["timelapse", "aircraft"],
-            "endpoints": {"timelapse": tl.endpoint, "aircraft": traffic.detail}}
+            "max_nm": adsb.MAX_NM, "features": ["timelapse", "aircraft"] + (["fplan"] if fl else []),
+            "endpoints": {"timelapse": tl.endpoint, "aircraft": traffic.detail,
+                          **({"fplan": lambda s: fl.plan(s("cs", 8))} if fl else {})}}
