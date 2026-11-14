@@ -47,6 +47,13 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
     Atlantic Tracks (from natTrak, refreshed every 30 min) follows that track's waypoints, then heads for its
     scheduled destination. Hovering it shows e.g. `→ KJFK via NAT C`. Anything else heads straight for its
     scheduled destination, or carries straight on.
+- **Boats:** the Layers menu's *Boats (AIS)* (off by default) shows ships from AIS: small hulls pointing
+  along their heading, carried on at their speed, with a five-minute course line when zoomed in and names with the
+  data tags. Hover or click one for its name, type, speed and course, destination and MMSI.
+  - Worldwide (wherever volunteers' coastal receivers reach) from aisstream.io, once the server has a free API key
+    (sign in at <https://aisstream.io>, then API Keys; `sudo secret livescope aisstream-key`, then rerun
+    `sudo bash deploy/install-service.sh`, or `AISSTREAM_KEY` locally). Without one, only the Baltic around Finland
+    (Fintraffic's Digitraffic, no key needed). Boats aren't in timelapses.
 - **Timelapses:** the clock button (top right) records the area in view on the server: one snapshot
   every 5 s, for 15 min to 24 h, carrying on with nobody watching. Any recording plays back in the scope at
   10× to 600×, eased between snapshots, with a scrubber; you can still pan, zoom, filter and click aircraft.
@@ -101,6 +108,7 @@ lag or have gaps; SCDS disables a subscription after 60 days without a connectio
 deploy/        install-service.sh: the system service, its secrets and auto-deploy
 site.py        the site's settings and which providers it uses
 adsb.py        ADS-B traffic (adsb.lol, adsb.fi), OpenSky world + ocean estimates (filed routes, North Atlantic Tracks), routes
+boats.py       ships from AIS (aisstream.io with a key, Fintraffic's Digitraffic without) for the Boats layer
 timelapse.py   records areas' traffic on the server and serves it back for playback
 swim.py        FAA SWIM flight data: the SCDS queue (Solace's Python API) and TFMS flight plans by callsign
 tools/         swim_capture.py: saves a few minutes of a SWIM feed to look at

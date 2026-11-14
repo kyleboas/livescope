@@ -4,6 +4,7 @@
 #   sudo secret livescope opensky-client-id
 #   sudo secret livescope opensky-client-secret
 #   sudo bash deploy/install-service.sh       # run again after adding or changing the secrets
+#   sudo secret livescope aisstream-key       # optional: worldwide boats (a free key from https://aisstream.io)
 #
 # FAA SWIM flight data (optional, see swim.py), per subscription (tfms, sfdps) from the SWIFT Portal:
 #   sudo secret livescope swim-tfms-username; sudo secret livescope swim-tfms-password; sudo secret livescope swim-tfms-queue
@@ -29,7 +30,7 @@ SECRETS=/etc/agent-secrets/projects/livescope
 UNIT=/etc/systemd/system/livescope.service
 
 creds=""
-for name in opensky-client-id opensky-client-secret \
+for name in opensky-client-id opensky-client-secret aisstream-key \
             swim-{tfms,sfdps}-{username,password,queue,url}; do
   f="$SECRETS/$name.secret"
   if [[ -f "$f" ]]; then
