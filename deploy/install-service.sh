@@ -93,9 +93,14 @@ UPDATER=/usr/local/lib/livescope-update.sh
 cat > "$UPDATER" <<SCRIPT
 #!/usr/bin/env bash
 set -uo pipefail
+# fetch, then fast-forward to the fetched branch (not "git pull": infinitescope's updater fetches the shared
+# scope checkout at the same moment, and two pulls racing over FETCH_HEAD make one fail), under one lock
+exec 9>/run/lock/scope-git.lock; flock -w 50 9 || true
 for repo in $SCOPE $SITE; do
-  runuser -u $AGENT_USER -- git -C "\$repo" pull --ff-only -q || echo "pull failed in \$repo" >&2
+  runuser -u $AGENT_USER -- git -C "\$repo" fetch -q origin || true
+  runuser -u $AGENT_USER -- git -C "\$repo" merge --ff-only -q '@{u}' || echo "update failed in \$repo" >&2
 done
+exec 9>&-
 now="\$(git -C $SCOPE rev-parse HEAD) \$(git -C $SITE rev-parse HEAD)"
 last="\$(cat /var/lib/livescope-update/revs 2>/dev/null)"
 if [[ "\$now" != "\$last" ]]; then
