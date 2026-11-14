@@ -15,6 +15,12 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
 - **Ground maps:** zoomed in to an airport (GND / FLD), its taxiways, aprons, terminals and gates come
   from OpenStreetMap. The server fetches them once through Overpass, in the background, and caches them
   for 30 days in `livedata/ground/`. Taxiing aircraft leave history trails.
+- **Aircraft card:** click an aircraft for everything the feed has on it, as on ADS-B Exchange: type and
+  its name, owner/operator, year built, country of registration, category, barometric and GPS altitude,
+  ground/indicated/true speed and Mach, track and headings, roll, wind and air temperature, autopilot
+  settings (selected altitude and heading, modes, QNH), signal (source, last seen, messages, RSSI) and
+  accuracy (NACp, NIC, SIL ...), with a planespotters.net photo. IAS, Mach, wind and the like only come
+  from aircraft that send them (mostly over Europe).
 - **ALL / ARR / DEP / ARR+DEP** (bottom right) greys out and untags everything except the picked
   airport's arrivals and/or departures.
   - ADS-B has no flight plan, so these are guessed from track, altitude and climb/descent. Traffic goes

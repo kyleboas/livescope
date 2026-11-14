@@ -17,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from scope.aircraft import Lookup
 from scope.core import R_NM, gc_brg, gc_dest, gc_nm
 
 SOURCES = (("adsb.lol", "https://api.adsb.lol/v2/point/{lat}/{lon}/{nm}"),
@@ -25,6 +26,11 @@ MAX_NM = 250
 FRESH_S = 2.0          # an area's traffic is refetched at most this often
 GAP_S = 0.4            # and upstream requests are spaced at least this far apart overall
 EMERG = ("7500", "7600", "7700")
+HEX_URLS = (("adsb.lol", "https://api.adsb.lol/v2/hex/{}"), ("adsb.fi", "https://opendata.adsb.fi/api/v2/hex/{}"))
+HEX_RE = re.compile(r"~?[0-9a-f]{6}")
+PHOTO_URL = "https://api.planespotters.net/pub/photos/{}/{}"
+PHOTO_UA = "livescope/1 (+https://livescope.kyleboas.com)"
+DB_KEYS = ("desc", "ownOp", "year")      # from the feed's aircraft database: adsb.fi sends them, adsb.lol doesn't
 
 
 def credential(name):
@@ -75,6 +81,11 @@ class Traffic:
         self.lock = threading.Lock()
         self.cache = {}            # key -> (monotonic time, state)
         self.last = -1e9
+        self.raw = {}              # hex -> (feed time, feed name, the feed's whole record): for one aircraft's card
+        self.db = {}               # hex -> (time, {desc, ownOp, year}) looked up on adsb.fi
+        self.db_lock, self.db_last = threading.Lock(), -1e9
+        self.lookup = Lookup()
+        self.photos = {}           # hex -> (time, {src, link, by} or None, or "asking")
 
     def fetch(self, lat, lon, nm):
         for name, url in SOURCES:
@@ -104,6 +115,7 @@ class Traffic:
             if acs is None:
                 st = {**(hit[1] if hit else {"aircraft": [], "t": time.time(), "src": None}), "ok": False}
             else:
+                self.keep_raw(src, acs, now)
                 seen = {}
                 for o in (convert(a, now, key[0], key[1]) for a in acs):
                     if o and (o["id"] not in seen or o["ts"] > seen[o["id"]]["ts"]):
@@ -114,6 +126,110 @@ class Traffic:
                 for k in sorted(self.cache, key=lambda k: self.cache[k][0])[:16]:
                     del self.cache[k]
             return st
+
+    def keep_raw(self, src, acs, now):
+        for a in acs:
+            hx = (a.get("hex") or "").lower()
+            t = now - (a.get("seen") or 0)
+            old = self.raw.get(hx)
+            if hx and (not old or t >= old[0]):
+                self.raw[hx] = (t, src, a)
+            if all(a.get(k) for k in DB_KEYS[1:]):
+                self.db[hx] = (time.time(), {k: a[k] for k in DB_KEYS if a.get(k)})
+        if len(self.raw) > 30000:
+            cut = time.time() - 300
+            self.raw = {k: v for k, v in self.raw.items() if v[0] > cut}
+        if len(self.db) > 30000:
+            self.db.clear()
+
+    def get_json(self, url, timeout=5):
+        req = urllib.request.Request(url, headers={"User-Agent": "livescope/1"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+
+    def by_hex(self, hx, sources=HEX_URLS):
+        """(feed time, feed name, record) for one aircraft straight from a feed, or None"""
+        for name, url in sources:
+            try:
+                d = self.get_json(url.format(urllib.parse.quote(hx)))
+            except Exception:  # noqa: BLE001 - try the next feed
+                continue
+            now = d.get("now") or time.time()
+            now = now / 1000 if now > 1e11 else now
+            for a in d.get("ac") or d.get("aircraft") or []:
+                if (a.get("hex") or "").lower() == hx:
+                    return now - (a.get("seen") or 0), name, a
+            return None
+        return None
+
+    def owner(self, hx, rec):
+        """desc, ownOp and year from the feed's aircraft database (adsb.fi's, a second at most between lookups)"""
+        if all(rec.get(k) for k in DB_KEYS[1:]):
+            return {k: rec[k] for k in DB_KEYS if rec.get(k)}
+        hit = self.db.get(hx)
+        if hit and time.time() - hit[0] < (86400 if hit[1] else 600):
+            return hit[1]
+        if not self.db_lock.acquire(timeout=3):
+            return {}
+        try:
+            hit = self.db.get(hx)
+            if hit and time.time() - hit[0] < 600:
+                return hit[1]
+            time.sleep(max(0.0, self.db_last + 1.1 - time.monotonic()))
+            self.db_last = time.monotonic()
+            got = self.by_hex(hx, HEX_URLS[1:])
+            db = {k: got[2][k] for k in DB_KEYS if got and got[2].get(k)}
+            self.db[hx] = (time.time(), db)
+            return db
+        finally:
+            self.db_lock.release()
+
+    def photo(self, hx, reg):
+        """an aircraft's photo from planespotters.net (by address, else registration), looked up once a day in the background"""
+        hit = self.photos.get(hx)
+        if hit and (hit[1] == "asking" or time.time() - hit[0] < (86400 if hit[1] else 3600)):
+            return hit[1] if hit[1] != "asking" else None
+        if len(self.photos) > 20000:
+            self.photos.clear()
+        self.photos[hx] = (time.time(), "asking")
+
+        def ask():
+            out = None
+            for kind, key in (("hex", hx), ("reg", reg)):
+                if not key:
+                    continue
+                try:
+                    req = urllib.request.Request(PHOTO_URL.format(kind, urllib.parse.quote(key)), headers={"User-Agent": PHOTO_UA})
+                    with urllib.request.urlopen(req, timeout=6) as r:
+                        p = (json.load(r).get("photos") or [None])[0]
+                except Exception:  # noqa: BLE001 - no photo this time
+                    p = None
+                t = p and (p.get("thumbnail_large") or p.get("thumbnail"))
+                if t and t.get("src"):
+                    out = {"src": t["src"], "link": p.get("link") or "", "by": p.get("photographer") or ""}
+                    break
+            self.photos[hx] = (time.time(), out)
+        threading.Thread(target=ask, daemon=True).start()
+        return None
+
+    def detail(self, s):
+        """/api/live/aircraft?hex=: everything the feed says about one aircraft, for its card"""
+        hx = s("hex", 7).lower()
+        if not HEX_RE.fullmatch(hx):
+            return {"ok": False, "error": "bad hex"}
+        hit = self.raw.get(hx)
+        if not hit or time.time() - hit[0] > 20:         # not in anyone's area lately: ask a feed for it
+            got = self.by_hex(hx)
+            if got:
+                self.raw[hx] = hit = got
+        if not hit:
+            return {"ok": False, "hex": hx}
+        t, src, a = hit
+        ac = {k: v for k, v in a.items() if k not in ("dst", "dir", "lat", "lon", "desc", "ownOp", "year")}
+        c = self.lookup.country(hx.lstrip("~")) if not hx.startswith("~") else None
+        return {"ok": True, "hex": hx, "t": round(t, 1), "src": src, "ac": ac, "db": self.owner(hx, a),
+                "country": c, "typeinfo": self.lookup.type(a.get("t")),
+                "photo": self.photo(hx, (a.get("r") or "").strip()) if not hx.startswith("~") else None}
 
 
 
