@@ -19,9 +19,11 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   or BlackHole carrying the Mac's sound for a clean feed); in Chrome / Edge also by sharing LiveATC's tab with its audio.
   Safari, clean: `brew install --cask blackhole-2ch`, then `swift tools/listen-setup.swift` makes a "Speakers + BlackHole"
   output and switches the Mac's sound to it (`... off` switches back); the page picks BlackHole by itself.
-  Whisper (base.en, transformers.js) writes each transmission down in the browser, on WebGPU where there is one; the
-  model (80 MB) downloads once from Hugging Face. The callsign heard ("Delta twelve thirty four", "November one two
-  three alpha bravo", "three alpha bravo") is matched against the aircraft on the scope. Nothing is sent anywhere.
+  Whisper small.en fine-tuned on real ATC radio (TU Delft's ATCO2 model, as ONNX: `Japb62/whisper-atc-small-onnx`)
+  writes each transmission down in the browser with transformers.js, on WebGPU where there is one (564 MB, else 290 MB
+  on the CPU), downloaded once from Hugging Face. On real ATC clips it gets about 70% of words right where plain Whisper
+  mostly invents sentences. The callsign heard ("Delta twelve thirty four", "November one two
+  three alpha bravo", "three alpha bravo") is matched against the aircraft on the scope, whoever says it: the controller's call or the pilot's readback. Nothing is sent anywhere.
 - **Live audio:** airports listed in `SITE["audio"]` (`site.py`) get ▶ buttons in their card that play the
   stream on the page; it keeps playing as you move around, and the header's ■ button stops it. Any stream
   the browser can play works, e.g. your own receiver through Icecast. None are listed yet: LiveATC.net's
