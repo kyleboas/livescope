@@ -14,7 +14,8 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   METAR (aviationweather.gov), plus LiveATC.net: its link opens LiveATC's page for the airport in a new tab,
   which follows the airport you pick and closes from the header (LiveATC ✕). You pick a feed
   there and it plays in LiveATC's own player; their terms rule out playing their streams on this page.
-- **Listen:** LISTEN (header) turns an aircraft's tag white while it is on the radio. Play LiveATC (its tab or
+- **Listen:** LISTEN (header) turns an aircraft's tag white while its pilot talks and light blue while the controller talks
+  to it (told apart by the phraseology: callsign first and an instruction, or a readback with the callsign last). Play LiveATC (its tab or
   app) and let the page hear it: in any browser, Safari included, through an audio input (the mic hearing the speakers,
   or BlackHole carrying the Mac's sound for a clean feed); in Chrome / Edge also by sharing LiveATC's tab with its audio.
   Safari, clean: `brew install --cask blackhole-2ch`, then `swift tools/listen-setup.swift` makes a "Speakers + BlackHole"
