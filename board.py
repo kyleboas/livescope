@@ -1,6 +1,7 @@
 """An airport's departures and arrivals board, and its traffic by the hour (when it's busiest).
 
 /api/live/board?a=list&ids=KJFK,KLGA  ->  each airport in short, for the list of boards (Board.summary)
+/api/live/board?a=top  ->  the 30 busiest big airports over the next 12 h, the same way (Board.top)
 /api/live/board?id=KATL  ->  {ok, id, t, now_h, hours: [{h, dep, arr, src}], typical: [{h, dep, arr}], dep: [...], arr: [...], ...}
     hours: 12 h back to 12 h ahead, the hour's start (h, unix seconds) and its count of departures and arrivals:
         src "seen", movements seen in the world recording (OpenSky): takeoffs and landings near the airport;
@@ -32,6 +33,7 @@ from timelapse import ROLL_H
 EDGE_S = 900            # the neighbouring hours' reports looked at, and the longest gap between two reports of one move
 LOW_FT = 3000           # first or last seen this low above an airport (and climbing / descending): took off or landed there
 FRESH_S = 30
+TOP_S = 300             # the busiest airports are ranked again this often
 CLASS_BONUS = {"L": 1.5, "M": 0.7}
 
 
@@ -234,6 +236,7 @@ class Board:
         self.moves = Moves(hist, airports)
         self.cache = {}
         self.tfms, self.tfms_t, self.tfms_lock = {}, 0, threading.Lock()
+        self.top_c = None
 
     def filed(self, ids, now):
         """TFMS's flights from and to the airport (any of its codes): [(kind 0 dep / 1 arr, flight)], from an index of
@@ -253,6 +256,8 @@ class Board:
             return [x for i in ids for x in self.tfms.get(i, ())]
 
     def endpoint(self, s):
+        if s("a", 6) == "top":
+            return self.top()
         if s("a", 6) == "list":
             return self.summary(s("ids", 400).upper().split(",")[:30])
         ident = s("id", 8).upper()
@@ -273,28 +278,36 @@ class Board:
     def summary(self, ids):
         """?a=list&ids=KJFK,KLGA: each airport's next 12 h in short, for the list of boards: {ok, now_h, apts: [{id, name, city,
         src filed / usual / none, next: [dep, arr] this hour, up: [this hour's and the next 12's dep + arr], peak: [h, n]}]}"""
-        now, out = time.time(), []
-        for ident in ids:
-            a = self.airports and ident and self.airports.one(ident)
-            if not a:
-                continue
-            hit = self.cache.get(("s", a[0]))
-            if hit and now - hit[0] < FRESH_S:
-                out.append(hit[1])
-                continue
-            b = self.build(a, now, rows=False)
-            ahead = [(h, t) for h, t in zip(b["hours"], b["typical"]) if h["h"] >= b["now_h"]]
-            src = "filed" if b["filed"] else "usual" if any(t["dep"] is not None for _, t in ahead) else "none"
-            up = [(h["dep"] + h["arr"]) if src == "filed" else (round(t["dep"] + t["arr"]) if t["dep"] is not None else None) for h, t in ahead]
-            nx = ([ahead[0][0]["dep"], ahead[0][0]["arr"]] if src == "filed" else
-                  [round(ahead[0][1]["dep"]), round(ahead[0][1]["arr"])] if src == "usual" and ahead[0][1]["dep"] is not None else None)
-            pk = max(((h["h"], n) for (h, _), n in zip(ahead, up) if n), key=lambda x: x[1], default=None)
-            r = {"id": a[0], "name": a[2], "city": a[3], "src": src, "next": nx, "up": up, "peak": list(pk) if pk else None}
-            self.cache[("s", a[0])] = (now, r)
-            out.append(r)
-        if len(self.cache) > 400:
+        now = time.time()
+        out = [self.brief(a, now) for a in (self.airports.one(i) for i in ids if i and self.airports) if a]
+        if len(self.cache) > 2000:
             self.cache = {k: v for k, v in self.cache.items() if now - v[0] < FRESH_S}
         return {"ok": True, "t": round(now), "now_h": int(now // 3600) * 3600, "apts": out}
+
+    def top(self, n=30):
+        """?a=top: the n busiest big airports over the next 12 h (filed in the US, else the usual), busiest first, in short"""
+        now = time.time()
+        hit = self.top_c
+        if not (hit and now - hit[0] < TOP_S):
+            big = [a for a in (self.airports.all if self.airports else []) if a[8] == "L"]
+            ranked = sorted((self.brief(a, now) for a in big), key=lambda r: -sum(v or 0 for v in r["up"]))
+            hit = self.top_c = (now, [r for r in ranked if any(r["up"])][:n])
+        return {"ok": True, "t": round(now), "now_h": int(now // 3600) * 3600, "apts": hit[1]}
+
+    def brief(self, a, now):
+        hit = self.cache.get(("s", a[0]))
+        if hit and now - hit[0] < FRESH_S:
+            return hit[1]
+        b = self.build(a, now, rows=False)
+        ahead = [(h, t) for h, t in zip(b["hours"], b["typical"]) if h["h"] >= b["now_h"]]
+        src = "filed" if b["filed"] else "usual" if any(t["dep"] is not None for _, t in ahead) else "none"
+        up = [(h["dep"] + h["arr"]) if src == "filed" else (round(t["dep"] + t["arr"]) if t["dep"] is not None else None) for h, t in ahead]
+        nx = ([ahead[0][0]["dep"], ahead[0][0]["arr"]] if src == "filed" else
+              [round(ahead[0][1]["dep"]), round(ahead[0][1]["arr"])] if src == "usual" and ahead[0][1]["dep"] is not None else None)
+        pk = max(((h["h"], n) for (h, _), n in zip(ahead, up) if n), key=lambda x: x[1], default=None)
+        r = {"id": a[0], "name": a[2], "city": a[3], "src": src, "next": nx, "up": up, "peak": list(pk) if pk else None}
+        self.cache[("s", a[0])] = (now, r)
+        return r
 
     def build(self, a, now, rows=True):
         ident, now_h = a[0], int(now // 3600)
