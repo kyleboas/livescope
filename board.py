@@ -3,7 +3,7 @@
 /api/live/board?id=KATL  ->  {ok, id, t, now_h, hours: [{h, dep, arr, src}], typical: [{h, dep, arr}], dep: [...], arr: [...], ...}
     hours: 12 h back to 12 h ahead, the hour's start (h, unix seconds) and its count of departures and arrivals:
         src "seen", movements seen in the world recording (OpenSky): takeoffs and landings near the airport;
-        src "filed" (US, FAA SWIM TFMS), flights filed to take off or land then (wheels off / on), for the hours ahead and
+        src "filed" (US airports, FAA SWIM TFMS), flights filed to take off or land then (wheels off / on), for the hours ahead and
         the current one (seen + filed so far); without TFMS an hour ahead is null.
     typical: the same hours on the previous one or two days (seen), averaged: what the hours ahead usually look like.
     dep / arr: the board's rows, [{cs, apt (to / from), t (best time: actual, else estimated), sched (TFMS's planned time),
@@ -146,7 +146,7 @@ class Moves:
         while True:
             try:
                 now = time.time()
-                for hr in self.h.hours():
+                for hr in reversed(self.h.hours()):        # newest first: the usual for the hours ahead fills in soonest
                     if hr in self.done or (hr + 1) * 3600 + EDGE_S + 120 > now:
                         continue
                     if not os.path.exists(os.path.join(self.h.dir, f"{hr}.json")):
@@ -270,6 +270,7 @@ class Board:
         for t, k, cs, hx in evs:
             seen[int(t // 3600)][k] += 1
         fl = self.filed(ids, now)
+        full = bool(fl) and a[4] == "US"                  # TFMS only has a foreign airport's flights to and from the US
         filed = defaultdict(lambda: [0, 0])
         rows = [[], []]
         lo, hi = now - 3600, now + 12 * 3600
@@ -302,9 +303,7 @@ class Board:
         for h in range(now_h - 12, now_h + 13):
             if h < now_h and h in done:
                 v, src = seen[h], "seen"
-            elif h == now_h and fl:
-                v, src = filed[h], "filed"
-            elif h > now_h and fl:
+            elif h >= now_h and full:
                 v, src = filed[h], "filed"
             else:
                 v, src = None, "none"
@@ -315,4 +314,4 @@ class Board:
             typical.append({"h": h * 3600, "dep": round(sum(p[0] for p in prev) / len(prev), 1) if prev else None,
                             "arr": round(sum(p[1] for p in prev) / len(prev), 1) if prev else None})
         return {"ok": True, "id": ident, "t": round(now), "now_h": now_h * 3600, "hours": hours, "typical": typical,
-                "dep": rows[0], "arr": rows[1], "filed": bool(fl), "seen_h": len(done), "src": "OpenSky" + (" + FAA SWIM" if fl else "")}
+                "dep": rows[0], "arr": rows[1], "filed": full, "seen_h": len(done), "src": "OpenSky" + (" + FAA SWIM" if fl else "")}
