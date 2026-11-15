@@ -14,6 +14,12 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   METAR (aviationweather.gov), plus LiveATC.net: its link opens LiveATC's page for the airport in a new tab,
   which follows the airport you pick and closes from the header (LiveATC ✕). You pick a feed
   there and it plays in LiveATC's own player; their terms rule out playing their streams on this page.
+- **Listen:** LISTEN (header) turns an aircraft's tag white while it is on the radio. Play LiveATC (its tab or
+  app) and let the page hear it: in any browser, Safari included, through an audio input (the mic hearing the speakers,
+  or BlackHole carrying the Mac's sound for a clean feed); in Chrome / Edge also by sharing LiveATC's tab with its audio.
+  Whisper (base.en, transformers.js) writes each transmission down in the browser, on WebGPU where there is one; the
+  model (80 MB) downloads once from Hugging Face. The callsign heard ("Delta twelve thirty four", "November one two
+  three alpha bravo", "three alpha bravo") is matched against the aircraft on the scope. Nothing is sent anywhere.
 - **Live audio:** airports listed in `SITE["audio"]` (`site.py`) get ▶ buttons in their card that play the
   stream on the page; it keeps playing as you move around, and the header's ■ button stops it. Any stream
   the browser can play works, e.g. your own receiver through Icecast. None are listed yet: LiveATC.net's
