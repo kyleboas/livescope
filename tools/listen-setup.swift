@@ -52,7 +52,12 @@ if CommandLine.arguments.dropFirst().first == "off" {
     setDefault(speakers); print("The Mac's sound is back on \(text(speakers, kAudioObjectPropertyName)).")
     exit(0)
 }
-guard let blackhole else { fail("BlackHole 2ch isn't installed. Install it first: brew install --cask blackhole-2ch") }
+guard let blackhole else {
+    if FileManager.default.fileExists(atPath: "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver") {
+        fail("BlackHole is installed but macOS hasn't loaded it yet. Restart the Mac's audio (sudo killall coreaudiod) or the Mac, then run this again.")
+    }
+    fail("BlackHole 2ch isn't installed. Install it first: brew install --cask blackhole-2ch")
+}
 guard let speakers else { fail("no speakers found") }
 var multi = all.first { text($0, kAudioDevicePropertyDeviceUID) == UID }
 if multi == nil {
