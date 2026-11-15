@@ -25,6 +25,9 @@ SITE = {
     # play (an Icecast mount from your own receiver, say). LiveATC.net's streams need their permission first:
     # their terms forbid third-party use. e.g. {"KJFK": [["TWR 119.1", "https://…/kjfk_twr"]]}
     "audio": {},
+    # an airborne aircraft that drops out of the feed (terrain, the edge of coverage) coasts on this many seconds past the
+    # usual 20 s of dead reckoning, drawn as a guess (hollow, CST); not one low near an airport (see scope's coastable)
+    "coast_s": 90,
 }
 
 
