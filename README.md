@@ -59,8 +59,8 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   every 90 s with an API client, eased between them) and only covers what OpenSky sees; over the oceans it uses
   the estimates. Each finished hour of that recording is indexed by aircraft once (`recent-index/`, about the same
   size again) so a lookup takes a few tens of ms; after a restart the hours are caught up in the background.
-- **Departures and arrivals boards:** BOARD (header) lists the 30 busiest big airports over the next 12 h (the picked one first), each with this hour's departures and
-  arrivals, its busiest hour and a small chart of the next 12 h. Click one (or the airport card's link) for the airport's board (‹ All airports goes back):
+- **Departures and arrivals boards:** BOARD (header) is a leaderboard of the 50 busiest big airports (the picked one pinned first):
+  this hour's departures and arrivals, flights over the next 12 h, and its busiest hour ahead. Click a column head to sort by it (again for the other way). Click one (or the airport card's link) for the airport's board (‹ All airports goes back):
   departures and arrivals, from an hour ago to 12 h ahead, with a chart of its flights hour by hour for the next 12 h
   and the busiest hour coming up (e.g. `Busiest: 00–01Z · ~68 flights`).
   - US airports: the flights filed with the FAA (SWIM TFMS) to take off or land there, with their times and status.

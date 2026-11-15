@@ -1,7 +1,7 @@
 """An airport's departures and arrivals board, and its traffic by the hour (when it's busiest).
 
 /api/live/board?a=list&ids=KJFK,KLGA  ->  each airport in short, for the list of boards (Board.summary)
-/api/live/board?a=top  ->  the 30 busiest big airports over the next 12 h, the same way (Board.top)
+/api/live/board?a=top  ->  the 50 busiest big airports over the next 12 h, the same way (Board.top)
 /api/live/board?id=KATL  ->  {ok, id, t, now_h, hours: [{h, dep, arr, src}], typical: [{h, dep, arr}], dep: [...], arr: [...], ...}
     hours: 12 h back to 12 h ahead, the hour's start (h, unix seconds) and its count of departures and arrivals:
         src "seen", movements seen in the world recording (OpenSky): takeoffs and landings near the airport;
@@ -284,7 +284,7 @@ class Board:
             self.cache = {k: v for k, v in self.cache.items() if now - v[0] < FRESH_S}
         return {"ok": True, "t": round(now), "now_h": int(now // 3600) * 3600, "apts": out}
 
-    def top(self, n=30):
+    def top(self, n=50):
         """?a=top: the n busiest big airports over the next 12 h (filed in the US, else the usual), busiest first, in short"""
         now = time.time()
         hit = self.top_c
