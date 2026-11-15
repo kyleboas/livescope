@@ -5,6 +5,7 @@ import board
 import boats
 import hazards
 import history
+import liveatc
 import swim
 import timelapse
 from scope.weather import Atis
@@ -49,7 +50,7 @@ def providers(airports=None):
     ships = boats.Boats()
     hist = history.History(tl, airports)
     return {"traffic": traffic, "world": world, "routes": routes, "atis": Atis(),
-            "max_nm": adsb.MAX_NM, "features": ["timelapse", "aircraft", "acars", "boats", "wx", "history", "listen", "board"] + (["fplan"] if fl else []),
-            "endpoints": {"timelapse": tl.endpoint, "aircraft": traffic.detail, "boats": ships.get, "wx": hazards.Hazards().get, "acars": acars.Acars().endpoint,
+            "max_nm": adsb.MAX_NM, "features": ["timelapse", "aircraft", "acars", "boats", "wx", "history", "listen", "board", "liveatc"] + (["fplan"] if fl else []),
+            "endpoints": {"timelapse": tl.endpoint, "aircraft": traffic.detail, "boats": ships.get, "wx": hazards.Hazards().get, "acars": acars.Acars().endpoint, "liveatc": liveatc.LiveAtc().endpoint,
                           "history": hist.endpoint, "board": board.Board(hist, airports, fl, routes).endpoint,
                           **({"fplan": lambda s: fl.plan(s("cs", 8))} if fl else {})}}

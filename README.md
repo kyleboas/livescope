@@ -14,8 +14,11 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   METAR (aviationweather.gov), plus LiveATC.net: its link opens LiveATC's page for the airport in a new tab,
   which follows the airport you pick and closes from the header (LiveATC ✕). You pick a feed
   there and it plays in LiveATC's own player; their terms rule out playing their streams on this page.
-  Click a frequency instead and the LiveATC tab shows LiveATC's frequency search for it: the feeds that carry
-  it, where Listen plays one.
+  Click a frequency instead and LiveATC's own player for it opens in a window, as their Listen button does. The server
+  finds the feed by LiveATC's usual names (`kjfk_twr_1191`, `kjfk_twr`) through their playlist files (`liveatc.py`;
+  their search pages are behind a Cloudflare check); feeds named otherwise (`kord1n2_gnd_meter`) get LiveATC's
+  frequency search instead. Safari starts it with Play unless liveatc.net is allowed to auto-play (Settings for
+  www.liveatc.net ▸ Auto-Play ▸ Allow All Auto-Play).
 - **Listen:** LISTEN (header) turns an aircraft's tag white while it is on the radio. Play LiveATC (its tab or
   app) and let the page hear it: in any browser, Safari included, through an audio input (the mic hearing the speakers,
   or BlackHole carrying the Mac's sound for a clean feed); in Chrome / Edge also by sharing LiveATC's tab with its audio.
