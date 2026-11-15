@@ -14,6 +14,11 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   METAR (aviationweather.gov), plus LiveATC.net: its link opens LiveATC's page for the airport in a new tab,
   which follows the airport you pick and closes from the header (LiveATC ✕). You pick a feed
   there and it plays in LiveATC's own player; their terms rule out playing their streams on this page.
+  Click a frequency instead and the LiveATC tab opens at that airport with the frequency in its address
+  (`#livescope=118.700`). With the userscript at https://livescope.kyleboas.com/liveatc.user.js installed
+  (Safari: the Userscripts app; Chrome/Firefox: Tampermonkey), LiveATC's page then plays the feed that lists that
+  frequency, in a bar at its top, or says no feed has it. Picking another airport leaves a playing frequency alone.
+  For it to start without a click in Safari: Settings for www.liveatc.net ▸ Auto-Play ▸ Allow All Auto-Play.
 - **Listen:** LISTEN (header) turns an aircraft's tag white while it is on the radio. Play LiveATC (its tab or
   app) and let the page hear it: in any browser, Safari included, through an audio input (the mic hearing the speakers,
   or BlackHole carrying the Mac's sound for a clean feed); in Chrome / Edge also by sharing LiveATC's tab with its audio.
