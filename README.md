@@ -57,6 +57,16 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   every 90 s with an API client, eased between them) and only covers what OpenSky sees; over the oceans it uses
   the estimates. Each finished hour of that recording is indexed by aircraft once (`recent-index/`, about the same
   size again) so a lookup takes a few tens of ms; after a restart the hours are caught up in the background.
+- **Departures and arrivals board:** BOARD (header, with an airport picked) or the airport card's link opens the airport's
+  departures and arrivals, from an hour ago to 12 h ahead, with a chart of its takeoffs and landings hour by hour, 12 h back
+  to 12 h ahead, and the busiest hour coming up (e.g. `Busiest in the next 12 h: 19–20Z, about 51 movements`).
+  - US airports: the flights filed with the FAA (SWIM TFMS) to take off or land there, with their times and status.
+    Airlines file a few hours ahead, so the later hours fill in as they do.
+  - Everywhere: takeoffs and landings seen in the world recording below ("The past"): on the ground then airborne,
+    or first or last seen low over an airport. Each hour is counted about 20 min after it ends (`recent-moves/`), and the
+    last two days give each hour's usual (the dashed line), which stands in for the hours ahead where nothing's filed.
+    Only what OpenSky sees, so airports without low-level coverage come out low.
+  - The aircraft on the scope add what they're doing now: inbound with an ETA, on approach, taxiing. Click one to select it.
 - **ALL / ARR / DEP / ARR+DEP** (bottom right) greys out and untags everything except the picked
   airport's arrivals and/or departures.
   - ADS-B has no flight plan, so these are guessed from track, altitude and climb/descent. Traffic goes
@@ -152,6 +162,7 @@ boats.py       ships from AIS (aisstream.io with a key, Fintraffic's Digitraffic
 timelapse.py   records areas' traffic on the server and serves it back for playback
 acars.py       ACARS messages for the aircraft card, from airframes.io
 history.py     each aircraft's flights over the last 48 h, from the world recording, for the card and replays
+board.py       an airport's departures and arrivals board and its movements by the hour (TFMS, and the world recording)
 swim.py        FAA SWIM flight data: the SCDS queue (Solace's Python API) and TFMS flight plans by callsign
 tools/         swim_capture.py: saves a few minutes of a SWIM feed to look at
 ```
