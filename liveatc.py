@@ -17,6 +17,7 @@ BUDGET = 60            # playlist requests a minute, all lookups together
 SUFFIX = {"TWR": "twr", "GND": "gnd", "CLD": "del", "DEL": "del", "CLNC": "del", "ATIS": "atis", "D-ATIS": "atis",
           "APP": "app", "DEP": "dep", "CTAF": "ctaf", "UNIC": "ctaf"}
 ID_RE = re.compile(r"[A-Z0-9]{3,4}")
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
 
 
 class LiveAtc:
@@ -24,6 +25,7 @@ class LiveAtc:
         self.lock = threading.Lock()
         self.seen = {}          # mount -> (checked at, title or None)
         self.calls = []
+        self.err = ""           # the last upstream failure, shown when nothing is found
 
     def title(self, mount):
         """The feed's title, or None if LiveATC has no such mount (or the budget is used up)"""
@@ -38,13 +40,15 @@ class LiveAtc:
             self.calls.append(now)
         t = None
         try:
-            req = urllib.request.Request(PLS.format(mount), headers={"User-Agent": "livescope/1"})
+            req = urllib.request.Request(PLS.format(mount), headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=8) as r:
                 body = r.read(2000).decode("latin-1")
+            self.err = ""
             if body.startswith("[playlist]"):
                 m = re.search(r"^Title1=(.*)$", body, re.M)
                 t = m.group(1).strip() if m else mount
-        except OSError:
+        except OSError as e:
+            self.err = f"{getattr(e, 'code', '') or type(e).__name__}: {getattr(e, 'reason', e)}"[:120]
             return None             # not cached: a hiccup isn't "no feed"
         with self.lock:
             self.seen[mount] = (now, t)
@@ -69,4 +73,4 @@ class LiveAtc:
             if other:               # its title names another frequency
                 continue
             return {"mount": mount, "title": t}
-        return {}
+        return {"error": self.err} if self.err else {}
