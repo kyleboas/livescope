@@ -28,6 +28,8 @@ SITE = {
     # an airborne aircraft that drops out of the feed (terrain, the edge of coverage) coasts on this many seconds past the
     # usual 20 s of dead reckoning, drawn as a guess (hollow, CST); not one low near an airport (see scope's coastable)
     "coast_s": 90,
+    # trail dots where the aircraft was 4, 8, … s ago, following it evenly (not stopping, then catching up every 4 s)
+    "smooth_trails": True,
 }
 
 
