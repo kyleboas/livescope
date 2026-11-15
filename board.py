@@ -1,5 +1,6 @@
 """An airport's departures and arrivals board, and its traffic by the hour (when it's busiest).
 
+/api/live/board?a=list&ids=KJFK,KLGA  ->  each airport in short, for the list of boards (Board.summary)
 /api/live/board?id=KATL  ->  {ok, id, t, now_h, hours: [{h, dep, arr, src}], typical: [{h, dep, arr}], dep: [...], arr: [...], ...}
     hours: 12 h back to 12 h ahead, the hour's start (h, unix seconds) and its count of departures and arrivals:
         src "seen", movements seen in the world recording (OpenSky): takeoffs and landings near the airport;
@@ -232,21 +233,28 @@ class Board:
         self.airports, self.flights, self.routes = airports, flights, routes
         self.moves = Moves(hist, airports)
         self.cache = {}
+        self.tfms, self.tfms_t, self.tfms_lock = {}, 0, threading.Lock()
 
     def filed(self, ids, now):
-        """TFMS's flights from and to the airport (any of its codes): [(kind 0 dep / 1 arr, flight)]"""
+        """TFMS's flights from and to the airport (any of its codes): [(kind 0 dep / 1 arr, flight)], from an index of
+        every airport's, made again every FRESH_S"""
         if not self.flights:
             return []
-        out = []
-        with self.flights.lock:
-            for f in self.flights.refs.values():
-                if f.get("dep") in ids:
-                    out.append((0, dict(f)))
-                if f.get("arr") in ids:
-                    out.append((1, dict(f)))
-        return out
+        with self.tfms_lock:
+            if now - self.tfms_t > FRESH_S:
+                idx = defaultdict(list)
+                with self.flights.lock:
+                    for f in self.flights.refs.values():
+                        if f.get("dep"):
+                            idx[f["dep"]].append((0, f))
+                        if f.get("arr"):
+                            idx[f["arr"]].append((1, f))
+                self.tfms, self.tfms_t = idx, now
+            return [x for i in ids for x in self.tfms.get(i, ())]
 
     def endpoint(self, s):
+        if s("a", 6) == "list":
+            return self.summary(s("ids", 400).upper().split(",")[:30])
         ident = s("id", 8).upper()
         a = self.airports and self.airports.one(ident)
         if not a:
@@ -262,7 +270,33 @@ class Board:
         self.cache[ident] = (now, out)
         return out
 
-    def build(self, a, now):
+    def summary(self, ids):
+        """?a=list&ids=KJFK,KLGA: each airport's next 12 h in short, for the list of boards: {ok, now_h, apts: [{id, name, city,
+        src filed / usual / none, next: [dep, arr] this hour, up: [this hour's and the next 12's dep + arr], peak: [h, n]}]}"""
+        now, out = time.time(), []
+        for ident in ids:
+            a = self.airports and ident and self.airports.one(ident)
+            if not a:
+                continue
+            hit = self.cache.get(("s", a[0]))
+            if hit and now - hit[0] < FRESH_S:
+                out.append(hit[1])
+                continue
+            b = self.build(a, now, rows=False)
+            ahead = [(h, t) for h, t in zip(b["hours"], b["typical"]) if h["h"] >= b["now_h"]]
+            src = "filed" if b["filed"] else "usual" if any(t["dep"] is not None for _, t in ahead) else "none"
+            up = [(h["dep"] + h["arr"]) if src == "filed" else (round(t["dep"] + t["arr"]) if t["dep"] is not None else None) for h, t in ahead]
+            nx = ([ahead[0][0]["dep"], ahead[0][0]["arr"]] if src == "filed" else
+                  [round(ahead[0][1]["dep"]), round(ahead[0][1]["arr"])] if src == "usual" and ahead[0][1]["dep"] is not None else None)
+            pk = max(((h["h"], n) for (h, _), n in zip(ahead, up) if n), key=lambda x: x[1], default=None)
+            r = {"id": a[0], "name": a[2], "city": a[3], "src": src, "next": nx, "up": up, "peak": list(pk) if pk else None}
+            self.cache[("s", a[0])] = (now, r)
+            out.append(r)
+        if len(self.cache) > 400:
+            self.cache = {k: v for k, v in self.cache.items() if now - v[0] < FRESH_S}
+        return {"ok": True, "t": round(now), "now_h": int(now // 3600) * 3600, "apts": out}
+
+    def build(self, a, now, rows=True):
         ident, now_h = a[0], int(now // 3600)
         ids = {ident} | ({ident[1:]} if len(ident) == 4 and ident[0] == "K" else set()) | ({a[1]} if a[1] and a[4] == "US" else set())
         evs, done = self.moves.at(ident)
@@ -272,7 +306,7 @@ class Board:
         fl = self.filed(ids, now)
         full = bool(fl) and a[4] == "US"                  # TFMS only has a foreign airport's flights to and from the US
         filed = defaultdict(lambda: [0, 0])
-        rows = [[], []]
+        want, rows = rows, [[], []]
         lo, hi = now - 3600, now + 12 * 3600
         for k, f in fl:
             t = f.get("on" if k else "off") or f.get("eta" if k else "etd")
@@ -280,7 +314,7 @@ class Board:
                 continue
             if f.get("status") != "CANCELLED":
                 filed[int(t // 3600)][k] += 1
-            if lo <= t <= hi:
+            if want and lo <= t <= hi:
                 done_t = f.get("on" if k else "off")
                 st = ("cancelled" if f.get("status") == "CANCELLED" else ("landed" if k else "departed") if done_t
                       else "en route" if k and (f.get("off") or f.get("status") == "ACTIVE") else "scheduled")
@@ -288,9 +322,9 @@ class Board:
                                 **({"sched": round(f["etd" if not k else "eta"])} if f.get("etd" if not k else "eta") else {})})
         have = [{r["cs"] for r in rows[0]}, {r["cs"] for r in rows[1]}]
         for t, k, cs, hx in evs:
-            if lo <= t <= now and (cs or hx) not in have[k]:
+            if want and lo <= t <= now and (cs or hx) not in have[k]:
                 rows[k].append({"cs": cs, "apt": "", "t": t, "st": "landed" if k else "departed", "src": "seen", "hex": hx})
-        if self.routes:                                   # where the seen ones went or came from (scheduled routes)
+        if want and self.routes:                          # where the seen ones went or came from (scheduled routes)
             got = self.routes.get([r["cs"] for k in (0, 1) for r in rows[k] if r["src"] == "seen" and r["cs"]], background=True)
             for k in (0, 1):
                 for r in rows[k]:
