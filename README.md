@@ -23,7 +23,9 @@ or search for any airport by ICAO, IATA or name. Close in, runways are drawn to 
   writes each transmission down in the browser with transformers.js, on WebGPU where there is one (564 MB, else 290 MB
   on the CPU), downloaded once from Hugging Face. On real ATC clips it gets about 70% of words right where plain Whisper
   mostly invents sentences. The callsign heard ("Delta twelve thirty four", "November one two
-  three alpha bravo", "three alpha bravo") is matched against the aircraft on the scope, whoever says it: the controller's call or the pilot's readback. Nothing is sent anywhere.
+  three alpha bravo", "three alpha bravo") is matched against the aircraft on the scope, whoever says it: the controller's call or the pilot's readback.
+  Captions along the bottom show the last two transmissions in ATC shorthand (`DAL1234 cleared to land RWY 22L`,
+  `FL350`, `HDG 270`, `121.0`), the callsign in white, and the one still being heard below them; LISTEN's panel turns them off. Nothing is sent anywhere.
 - **Live audio:** airports listed in `SITE["audio"]` (`site.py`) get ▶ buttons in their card that play the
   stream on the page; it keeps playing as you move around, and the header's ■ button stops it. Any stream
   the browser can play works, e.g. your own receiver through Icecast. None are listed yet: LiveATC.net's
